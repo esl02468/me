@@ -369,20 +369,25 @@ function renderBias() {
 }
 
 function renderLevels() {
-  const all = [...(snap.user_levels || []).map(l => ({ ...l, user: true })),
-               ...(snap.auto_levels || [])]
-    .sort((a, b) => b.price - a.price);
+  const scored = (snap.reversal || []).slice().sort((a, b) => b.price - a.price);
   const px = snap.price;
   let html = "", inserted = false;
-  for (const lv of all) {
+  for (const lv of scored) {
     if (!inserted && px != null && lv.price < px) {
       html += `<div class="lvl" style="color:var(--ink)"><span>▸ price</span><b>${fmt(px)}</b></div>`;
       inserted = true;
     }
     const c = lv.user ? "var(--level-user)" : "var(--muted)";
-    html += `<div class="lvl"><span style="color:${c}">${lv.label || lv.kind}</span><b>${fmt(lv.price)}</b></div>`;
+    const weight = lv.rating === "HIGH" ? "700" : lv.rating === "MODERATE" ? "500" : "400";
+    const badge = `<span style="font-weight:${weight}; font-size:11px" title="reversal confidence #${lv.rank}: ` +
+      `${lv.touches} touches, ${lv.bounces} bounces, ${lv.breaks} breaks">` +
+      `#${lv.rank} · ${lv.score}</span>`;
+    html += `<div class="lvl"><span style="color:${c}">${lv.label}</span>` +
+            `${badge}<b>${fmt(lv.price)}</b></div>`;
   }
   $("levels").innerHTML = html;
+  $("srcnote").textContent =
+    "#rank · score = reversal confidence (today's bounces + structure). Edit levels.json to change your levels.";
 }
 
 function renderBacktest(bt) {

@@ -59,6 +59,24 @@ STRONG BEARISH → STRONG BULLISH:
 | Prev close | trading above yesterday's close |
 | Momentum | last 10 minutes' net move exceeds ATR |
 
+## Reversal-likelihood ranking
+
+`python3 rank_levels.py` scores every level (yours + auto) on how likely it
+is to act as a reversal area, and ranks them:
+
+- **empirical** — today's tape at the level: touch episodes → bounce rate
+  (rejection ≥ 1 ATR within 15 bars) vs. breaks (close through the band)
+- **kind prior** — PDH/PDL > opening range > VWAP > prev close; user levels
+  carry a deliberate-S/R prior
+- **confluence** — other levels stacked within 0.5 ATR
+- **bias alignment** — supports score higher in bullish tape, resistances in
+  bearish tape
+- **break penalty** — levels already violated today lose credibility
+
+Output is a 0–100 confidence score (HIGH ≥ 70, MODERATE ≥ 45, LOW below) —
+a transparent heuristic, **not a true probability**. The dashboard shows the
+same ranking as `#rank · score` badges in the Chart Levels card.
+
 ## Strategy Analyzer
 
 Backtests today's 1-minute candles with next-bar-open fills, one contract,

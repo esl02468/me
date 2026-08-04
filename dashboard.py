@@ -30,6 +30,7 @@ from nq.backtest import run_all
 from nq.bias import OPENING_RANGE_BARS, compute_bias, vwap
 from nq.data import Session, get_session
 from nq.levels import Level, load_levels, save_levels
+from nq.reversal import rank_levels
 
 ROOT = Path(__file__).parent
 STATIC = ROOT / "static"
@@ -73,6 +74,16 @@ def _auto_levels(sess: Session) -> list[dict]:
 def build_snapshot() -> dict:
     sess: Session = get_session(demo=True if _demo else None)
     bias = compute_bias(sess)
+    auto = _auto_levels(sess)
+    user = [asdict(l) for l in load_levels()]
+    reversal = [
+        {
+            "price": r.price, "label": r.label, "user": r.user, "rank": r.rank,
+            "score": r.score, "rating": r.rating, "touches": r.touches,
+            "bounces": r.bounces, "breaks": r.breaks, "distance": r.distance,
+        }
+        for r in rank_levels(sess, user + auto, bias)
+    ]
     return {
         "symbol": sess.symbol,
         "source": sess.source,
@@ -89,8 +100,9 @@ def build_snapshot() -> dict:
             "components": bias.components,
             "detail": bias.detail,
         },
-        "auto_levels": _auto_levels(sess),
-        "user_levels": [asdict(l) for l in load_levels()],
+        "auto_levels": auto,
+        "user_levels": user,
+        "reversal": reversal,
     }
 
 
