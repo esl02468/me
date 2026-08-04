@@ -75,7 +75,13 @@ is to act as a reversal area, and ranks them:
 
 Output is a 0–100 confidence score (HIGH ≥ 70, MODERATE ≥ 45, LOW below) —
 a transparent heuristic, **not a true probability**. The dashboard shows the
-same ranking as `#rank · score` badges in the Chart Levels card.
+same ranking as `#rank · right%` badges in the Chart Levels card.
+
+**>51%-right filter (default on):** both the CLI and the dashboard hide
+anything not *proven* right more than 51% of the time today — levels whose
+bounce rate is ≤ 51% (or that were never tested), and strategies whose win
+rate is ≤ 51%. Use `--all` (CLI) or untick the checkbox (dashboard) to see
+everything. `--min-rate 0.6` raises the bar.
 
 ## Strategy Analyzer
 

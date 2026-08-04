@@ -148,6 +148,10 @@
     </div>
     <div class="card">
       <h2>Chart levels</h2>
+      <label style="display:flex; gap:6px; align-items:center; font-size:12px; color:var(--ink-2); margin-bottom:8px">
+        <input type="checkbox" id="provenOnly" checked>
+        only levels &gt;51% right today
+      </label>
       <div id="levels"></div>
       <div id="srcnote">Edit levels.json to change your levels.</div>
     </div>
@@ -177,6 +181,15 @@ const fmt = (x, d = 2) => x == null ? "—" : x.toLocaleString("en-US",
 
 let snap = null;
 let hoverIdx = -1;
+const MIN_RIGHT = 0.51;
+
+function provenOnly() { return $("provenOnly").checked; }
+function isProven(lv) { return lv.bounce_rate != null && lv.bounce_rate > MIN_RIGHT; }
+// Reversal entries, honoring the >51%-right filter when it's on.
+function visibleReversal() {
+  const all = snap.reversal || [];
+  return provenOnly() ? all.filter(isProven) : all;
+}
 
 function ema(vals, p) {
   if (!vals.length) return [];
@@ -209,7 +222,8 @@ function drawChart() {
 
   const cs = snap.candles;
   const plotW = W - PADL - PADR, plotH = H - PADT - PADB;
-  const levels = [...(snap.user_levels || []), ...(snap.auto_levels || [])];
+  const levels = visibleReversal().map(r =>
+    ({ price: r.price, label: r.label, kind: r.user ? "user" : "auto" }));
   let lo = Math.min(...cs.map(c => c.l));
   let hi = Math.max(...cs.map(c => c.h));
   // Include levels near the price action so lines don't silently clip.
@@ -369,7 +383,8 @@ function renderBias() {
 }
 
 function renderLevels() {
-  const scored = (snap.reversal || []).slice().sort((a, b) => b.price - a.price);
+  const scored = visibleReversal().slice().sort((a, b) => b.price - a.price);
+  const hidden = (snap.reversal || []).length - scored.length;
   const px = snap.price;
   let html = "", inserted = false;
   for (const lv of scored) {
@@ -379,19 +394,33 @@ function renderLevels() {
     }
     const c = lv.user ? "var(--level-user)" : "var(--muted)";
     const weight = lv.rating === "HIGH" ? "700" : lv.rating === "MODERATE" ? "500" : "400";
-    const badge = `<span style="font-weight:${weight}; font-size:11px" title="reversal confidence #${lv.rank}: ` +
-      `${lv.touches} touches, ${lv.bounces} bounces, ${lv.breaks} breaks">` +
-      `#${lv.rank} · ${lv.score}</span>`;
+    const rate = lv.bounce_rate != null ? `${Math.round(lv.bounce_rate * 100)}% right` : "untested";
+    const badge = `<span style="font-weight:${weight}; font-size:11px" title="reversal confidence #${lv.rank} ` +
+      `(score ${lv.score}): ${lv.touches} touches, ${lv.bounces} bounces, ${lv.breaks} breaks">` +
+      `#${lv.rank} · ${rate}</span>`;
     html += `<div class="lvl"><span style="color:${c}">${lv.label}</span>` +
             `${badge}<b>${fmt(lv.price)}</b></div>`;
   }
+  if (!scored.length) {
+    html = `<div class="lvl" style="color:var(--muted)">no level was right &gt;51% of the time today</div>`;
+  }
   $("levels").innerHTML = html;
   $("srcnote").textContent =
-    "#rank · score = reversal confidence (today's bounces + structure). Edit levels.json to change your levels.";
+    (provenOnly() && hidden ? `${hidden} hidden (≤51% right or untested today). ` : "") +
+    "right% = today's bounces/touches. Edit levels.json to change your levels.";
 }
 
+let lastBt = null;
 function renderBacktest(bt) {
-  const rows = (bt.reports || []).map(r => {
+  lastBt = bt;
+  let reports = bt.reports || [];
+  const total = reports.length;
+  if (provenOnly()) reports = reports.filter(r => r.win_rate > MIN_RIGHT * 100);
+  const note = document.querySelector("#srcnote2");
+  note.textContent = (provenOnly() && total - reports.length
+    ? `${total - reports.length} strategy(ies) hidden: win rate ≤ 51% today. `
+    : "") + "Next-bar-open fills, 1 contract, no costs. Analysis only — not trade advice.";
+  const rows = reports.map(r => {
     const pcls = r.total_points > 0 ? "pos" : r.total_points < 0 ? "neg" : "";
     return `<tr><td>${r.strategy}</td><td>${r.trades}</td><td>${r.win_rate}</td>` +
       `<td class="${pcls}">${fmt(r.total_points)}</td>` +
@@ -399,8 +428,10 @@ function renderBacktest(bt) {
       `<td class="${pcls}">${fmt(r.pnl_mnq_usd, 0)}</td>` +
       `<td>${r.profit_factor}</td><td>${fmt(r.max_drawdown_points)}</td></tr>`;
   }).join("");
-  document.querySelector("#bt tbody").innerHTML =
-    rows || `<tr><td colspan="8" style="color:var(--muted)">not enough candles yet</td></tr>`;
+  document.querySelector("#bt tbody").innerHTML = rows ||
+    `<tr><td colspan="8" style="color:var(--muted)">${
+      provenOnly() && total ? "no strategy won more than 51% of trades today"
+                            : "not enough candles yet"}</td></tr>`;
 }
 
 /* ---------- polling ---------- */
@@ -431,6 +462,10 @@ setInterval(poll, 15000);
 setInterval(pollBacktest, 60000);
 window.addEventListener("resize", drawChart);
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawChart);
+$("provenOnly").addEventListener("change", () => {
+  if (snap) { renderLevels(); drawChart(); }
+  if (lastBt) renderBacktest(lastBt);
+});
 </script>
 </body>
 </html>

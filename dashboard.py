@@ -81,6 +81,7 @@ def build_snapshot() -> dict:
             "price": r.price, "label": r.label, "user": r.user, "rank": r.rank,
             "score": r.score, "rating": r.rating, "touches": r.touches,
             "bounces": r.bounces, "breaks": r.breaks, "distance": r.distance,
+            "bounce_rate": r.bounce_rate,
         }
         for r in rank_levels(sess, user + auto, bias)
     ]

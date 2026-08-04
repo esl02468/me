@@ -52,6 +52,11 @@ class LevelScore:
     distance: float | None = None  # points from current price (+above/-below)
     components: dict[str, float] = field(default_factory=dict)
 
+    @property
+    def bounce_rate(self) -> float | None:
+        """Fraction of today's touches that bounced; None if never tested."""
+        return self.bounces / self.touches if self.touches else None
+
 
 def _touch_episodes(candles: list[Candle], level: float, tol: float) -> list[int]:
     """Indices where a touch episode *starts* (consecutive touching bars grouped)."""
@@ -163,3 +168,12 @@ def rank_levels(
     for i, ls in enumerate(out, 1):
         ls.rank = i
     return out
+
+
+def filter_proven(scored: list[LevelScore], min_rate: float = 0.51) -> list[LevelScore]:
+    """Keep only levels proven right more than `min_rate` of the time today.
+
+    A level counts as "right" when a touch bounced. Untested levels are
+    excluded — no touches means no evidence either way.
+    """
+    return [l for l in scored if l.bounce_rate is not None and l.bounce_rate > min_rate]
