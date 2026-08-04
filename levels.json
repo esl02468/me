@@ -1,0 +1,9 @@
+{
+  "levels": [
+    {"price": 23600, "label": "Weekly high", "kind": "resistance"},
+    {"price": 23500, "label": "Overnight high", "kind": "resistance"},
+    {"price": 23450, "label": "Pivot", "kind": "pivot"},
+    {"price": 23380, "label": "Overnight low", "kind": "support"},
+    {"price": 23300, "label": "Weekly low", "kind": "support"}
+  ]
+}

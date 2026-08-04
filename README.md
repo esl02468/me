@@ -1,0 +1,89 @@
+# NQ Toolkit
+
+Real-time NQ (Nasdaq-100 futures) price fetcher, bias indicator, intraday
+strategy backtester, and a live dashboard with your chart levels. Pure Python
+standard library — nothing to install.
+
+## Quick start
+
+```bash
+# 1. Live price + bias in the terminal (one shot, or --watch to stream)
+python3 fetch_nq.py
+python3 fetch_nq.py --watch
+
+# 2. Strategy Analyzer: backtest today's 1-minute session
+python3 analyze.py
+python3 analyze.py --trades          # include the per-trade log
+python3 analyze.py --strategy orb    # single strategy
+
+# 3. Dashboard: live chart + levels + bias + analyzer
+python3 dashboard.py                 # → http://localhost:8787
+```
+
+No network where you're running it? Every command accepts `--demo`
+(or `NQ_DEMO=1`) to run on a realistic synthetic session.
+
+## Data sources
+
+Live data comes from Yahoo Finance's public chart API (`NQ=F`, 1-minute
+candles, ~15 min delayed for CME futures) with a Stooq last-price fallback.
+No API keys needed. The dashboard server proxies the feed so the browser
+never deals with CORS, and caches upstream calls (10 s) so polling stays
+polite.
+
+## Your chart levels — `levels.json`
+
+```json
+{
+  "levels": [
+    {"price": 23600, "label": "Weekly high", "kind": "resistance"},
+    {"price": 23380, "label": "Overnight low", "kind": "support"}
+  ]
+}
+```
+
+Edit the file (or `POST /api/levels`) and the dashboard picks it up on the
+next refresh. Auto-levels — prior-day high/low/close, VWAP, opening-range
+high/low — are computed live and drawn alongside; don't duplicate them.
+
+## Bias indicator
+
+Five components each vote −1 / 0 / +1; the sum (−5…+5) maps to
+STRONG BEARISH → STRONG BULLISH:
+
+| Component | Bullish when… |
+|---|---|
+| VWAP | price above session VWAP |
+| EMA 9/21 | fast EMA above slow |
+| Opening range | price above the first 15 minutes' high |
+| Prev close | trading above yesterday's close |
+| Momentum | last 10 minutes' net move exceeds ATR |
+
+## Strategy Analyzer
+
+Backtests today's 1-minute candles with next-bar-open fills, one contract,
+no costs. Built-ins:
+
+- `ema_cross` — EMA 9/21 crossover, always-in flip
+- `orb` — 15-minute opening-range breakout, 1.5× ATR stop / 3× ATR target
+- `vwap_fade` — fade 2× ATR stretches from VWAP back to VWAP
+
+PnL is reported in points and dollars for both NQ ($20/pt) and MNQ ($2/pt).
+Add a strategy by writing a function in `nq/backtest.py` and registering it
+in `STRATEGIES`.
+
+**This is an analysis tool, not trade advice.** Fills ignore slippage and
+commissions; delayed data means live readings lag the tape.
+
+## Layout
+
+```
+nq/data.py       market data (Yahoo → Stooq → demo generator)
+nq/bias.py       bias engine (VWAP, EMA, ATR, opening range)
+nq/backtest.py   strategies + reports
+nq/levels.py     levels.json load/save
+fetch_nq.py      terminal fetcher/bias CLI
+analyze.py       terminal backtest CLI
+dashboard.py     stdlib HTTP server + JSON API
+static/dashboard.html   the dashboard UI (self-contained)
+```
