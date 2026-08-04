@@ -33,7 +33,7 @@ from nq.levels import Level, load_levels, save_levels
 from nq.reversal import rank_levels
 
 ROOT = Path(__file__).parent
-STATIC = ROOT / "static"
+INDEX = ROOT / "index.html"
 CACHE_TTL = 10.0  # seconds between upstream fetches
 
 _demo = False
@@ -71,8 +71,10 @@ def _auto_levels(sess: Session) -> list[dict]:
     return out
 
 
-def build_snapshot() -> dict:
-    sess: Session = get_session(demo=True if _demo else None)
+def build_snapshot(demo: bool | None = None) -> dict:
+    if demo is None:
+        demo = True if _demo else None
+    sess: Session = get_session(demo=demo)
     bias = compute_bias(sess)
     auto = _auto_levels(sess)
     user = [asdict(l) for l in load_levels()]
@@ -107,8 +109,10 @@ def build_snapshot() -> dict:
     }
 
 
-def build_backtest() -> dict:
-    sess: Session = get_session(demo=True if _demo else None)
+def build_backtest(demo: bool | None = None) -> dict:
+    if demo is None:
+        demo = True if _demo else None
+    sess: Session = get_session(demo=demo)
     reports = run_all(sess)
     return {
         "symbol": sess.symbol,
@@ -133,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         try:
             if self.path in ("/", "/index.html"):
-                self._send(200, (STATIC / "dashboard.html").read_bytes(), "text/html; charset=utf-8")
+                self._send(200, INDEX.read_bytes(), "text/html; charset=utf-8")
             elif self.path == "/api/snapshot":
                 self._json(_cached("snapshot", CACHE_TTL, build_snapshot))
             elif self.path == "/api/backtest":

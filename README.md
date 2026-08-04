@@ -23,6 +23,16 @@ python3 dashboard.py                 # → http://localhost:8787
 No network where you're running it? Every command accepts `--demo`
 (or `NQ_DEMO=1`) to run on a realistic synthetic session.
 
+## View it anywhere (Vercel)
+
+The repo deploys to Vercel as-is: `index.html` is served at the root and
+`api/*.py` run as Python serverless functions that fetch live data
+server-side. Every push gets a preview URL; merging to `main` updates the
+production URL. Append `?demo=1` to the page URL to force the synthetic
+session (useful if the data source rate-limits cloud IPs). The cloud
+deployment is read-only — change levels by editing `levels.json` and
+pushing.
+
 ## Data sources
 
 Live data comes from Yahoo Finance's public chart API (`NQ=F`, 1-minute

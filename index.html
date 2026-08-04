@@ -435,9 +435,11 @@ function renderBacktest(bt) {
 }
 
 /* ---------- polling ---------- */
+// Add ?demo=1 to the page URL to force the synthetic session end-to-end.
+const API_QS = new URLSearchParams(location.search).get("demo") ? "?demo=1" : "";
 async function poll() {
   try {
-    const r = await fetch("/api/snapshot");
+    const r = await fetch("/api/snapshot" + API_QS);
     const data = await r.json();
     if (data.error) throw new Error(data.error);
     snap = data;
@@ -451,7 +453,7 @@ async function poll() {
 }
 async function pollBacktest() {
   try {
-    const r = await fetch("/api/backtest");
+    const r = await fetch("/api/backtest" + API_QS);
     const data = await r.json();
     if (!data.error) renderBacktest(data);
   } catch (e) { /* transient */ }
