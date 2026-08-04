@@ -171,9 +171,10 @@ def rank_levels(
 
 
 def filter_proven(scored: list[LevelScore], min_rate: float = 0.51) -> list[LevelScore]:
-    """Keep only levels proven right more than `min_rate` of the time today.
+    """Drop levels proven wrong: tested today with a bounce rate <= `min_rate`.
 
-    A level counts as "right" when a touch bounced. Untested levels are
-    excluded — no touches means no evidence either way.
+    Untested levels stay — no touches means no evidence either way, and the
+    untouched levels ahead of price are exactly where the next reversal can
+    happen. Only evidence against a level removes it.
     """
-    return [l for l in scored if l.bounce_rate is not None and l.bounce_rate > min_rate]
+    return [l for l in scored if l.bounce_rate is None or l.bounce_rate > min_rate]

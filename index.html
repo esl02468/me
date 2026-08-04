@@ -150,7 +150,7 @@
       <h2>Chart levels</h2>
       <label style="display:flex; gap:6px; align-items:center; font-size:12px; color:var(--ink-2); margin-bottom:8px">
         <input type="checkbox" id="provenOnly" checked>
-        only levels &gt;51% right today
+        hide levels proven wrong today (≤51% of touches held)
       </label>
       <div id="levels"></div>
       <div id="srcnote">Edit levels.json to change your levels.</div>
@@ -184,7 +184,8 @@ let hoverIdx = -1;
 const MIN_RIGHT = 0.51;
 
 function provenOnly() { return $("provenOnly").checked; }
-function isProven(lv) { return lv.bounce_rate != null && lv.bounce_rate > MIN_RIGHT; }
+// Keep untested levels — only evidence against a level (≤51% bounce rate) hides it.
+function isProven(lv) { return lv.bounce_rate == null || lv.bounce_rate > MIN_RIGHT; }
 // Reversal entries, honoring the >51%-right filter when it's on.
 function visibleReversal() {
   const all = snap.reversal || [];
@@ -402,12 +403,12 @@ function renderLevels() {
             `${badge}<b>${fmt(lv.price)}</b></div>`;
   }
   if (!scored.length) {
-    html = `<div class="lvl" style="color:var(--muted)">no level was right &gt;51% of the time today</div>`;
+    html = `<div class="lvl" style="color:var(--muted)">no levels — add yours to levels.json</div>`;
   }
   $("levels").innerHTML = html;
   $("srcnote").textContent =
-    (provenOnly() && hidden ? `${hidden} hidden (≤51% right or untested today). ` : "") +
-    "right% = today's bounces/touches. Edit levels.json to change your levels.";
+    (provenOnly() && hidden ? `${hidden} hidden (proven ≤51% right today). ` : "") +
+    "right% = today's bounces/touches; untested = not reached yet. Edit levels.json to change your levels.";
 }
 
 let lastBt = null;

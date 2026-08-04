@@ -87,11 +87,13 @@ Output is a 0–100 confidence score (HIGH ≥ 70, MODERATE ≥ 45, LOW below) �
 a transparent heuristic, **not a true probability**. The dashboard shows the
 same ranking as `#rank · right%` badges in the Chart Levels card.
 
-**>51%-right filter (default on):** both the CLI and the dashboard hide
-anything not *proven* right more than 51% of the time today — levels whose
-bounce rate is ≤ 51% (or that were never tested), and strategies whose win
-rate is ≤ 51%. Use `--all` (CLI) or untick the checkbox (dashboard) to see
-everything. `--min-rate 0.6` raises the bar.
+**>51%-right filter (default on):** the CLI and dashboard hide what today's
+tape has *proven wrong* — levels that were tested and held ≤ 51% of the
+time, and strategies whose win rate is ≤ 51%. Untested levels stay visible
+(marked "untested"): the untouched levels ahead of price are exactly where
+the next reversal can happen, so only evidence against a level removes it.
+Use `--all` (CLI) or untick the checkbox (dashboard) to see everything;
+`--min-rate 0.6` raises the bar.
 
 ## Strategy Analyzer
 

@@ -33,7 +33,7 @@ def main() -> int:
     ap.add_argument("--demo", action="store_true", help="synthetic data, no network")
     ap.add_argument("--json", action="store_true", dest="as_json")
     ap.add_argument("--all", action="store_true", dest="show_all",
-                    help="include unproven levels (default: only >51%% bounce rate today)")
+                    help="include levels proven wrong (default: hide tested levels ≤51%% right)")
     ap.add_argument("--min-rate", type=float, default=0.51,
                     help="bounce-rate cutoff for the proven filter (default 0.51)")
     args = ap.parse_args()
@@ -80,8 +80,8 @@ def main() -> int:
         print(f"  {l.rank:>2} {l.label[:15]:<16}{l.price:>11,.2f}{dist:>9}"
               f"{l.touches:>8}{l.bounces:>8}{l.breaks:>6}{rate:>8}{l.score:>7.1f}  {l.rating} ({who})")
     if hidden:
-        print(f"\n  {hidden} level(s) hidden: bounce rate ≤ {args.min_rate:.0%} or never "
-              "tested today (--all to show).")
+        print(f"\n  {hidden} level(s) hidden: tested and ≤ {args.min_rate:.0%} right today "
+              "(--all to show). Untested levels stay — they're where the next reversal can happen.")
     print("\n  right% = today's bounces/touches at the level. Score adds level-type prior,"
           "\n  confluence, bias alignment, and break penalty. Heuristic, not probability.\n")
     return 0
