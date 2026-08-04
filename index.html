@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NQ Dashboard</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --up: #0ca30c;        /* status good */
+    --down: #d03b3b;      /* status critical */
+    --vwap: #2a78d6;      /* series 1 blue */
+    --ema-fast: #eb6834;  /* series 2 orange */
+    --ema-slow: #1baf7a;  /* series 3 aqua */
+    --level-user: #52514e;  /* secondary ink — dash + label carry identity */
+    --level-auto: #898781;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --up: #0ca30c;
+      --down: #e66767;
+      --vwap: #3987e5;
+      --ema-fast: #d95926;
+      --ema-slow: #199e70;
+      --level-user: #c3c2b7;
+      --level-auto: #898781;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 16px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 12px;
+    max-width: 1280px;
+    margin: 0 auto;
+  }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .full { grid-column: 1 / -1; }
+  header.full {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  h1 { font-size: 15px; font-weight: 600; color: var(--ink-2); }
+  #price { font-size: 34px; font-weight: 650; }
+  #chg { font-size: 15px; font-weight: 600; }
+  #chg.up { color: var(--up); }
+  #chg.down { color: var(--down); }
+  #meta { color: var(--muted); font-size: 12px; margin-left: auto; }
+  h2 { font-size: 12px; font-weight: 600; color: var(--muted);
+       text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+  #chartwrap { position: relative; }
+  canvas { width: 100%; height: 440px; display: block; }
+  #tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 9px; font-size: 12px; color: var(--ink-2);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12); white-space: nowrap; z-index: 5;
+  }
+  #tooltip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2);
+            margin-top: 8px; flex-wrap: wrap; }
+  .legend span::before {
+    content: ""; display: inline-block; width: 14px; height: 3px;
+    border-radius: 2px; margin-right: 5px; vertical-align: middle;
+    background: var(--c);
+  }
+  .biasrow { display: flex; align-items: center; gap: 8px; margin: 6px 0;
+             font-size: 13px; color: var(--ink-2); }
+  .biasrow .arrow { width: 16px; text-align: center; font-weight: 700; }
+  .arrow.pos { color: var(--up); } .arrow.neg { color: var(--down); }
+  .arrow.zero { color: var(--muted); }
+  #biaslabel { font-size: 19px; font-weight: 650; margin-bottom: 2px; }
+  #biasscore { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: right; color: var(--muted); font-weight: 600; padding: 4px 6px;
+       border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child { text-align: left; }
+  td { text-align: right; padding: 5px 6px; border-bottom: 1px solid var(--grid);
+       color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  td.pos { color: var(--up); font-weight: 600; }
+  td.neg { color: var(--down); font-weight: 600; }
+  .lvl { display: flex; justify-content: space-between; font-size: 13px;
+         padding: 4px 0; color: var(--ink-2); border-bottom: 1px solid var(--grid); }
+  .lvl b { font-variant-numeric: tabular-nums; color: var(--ink); }
+  #err { color: var(--down); font-size: 13px; display: none; margin-top: 6px; }
+  #srcnote { font-size: 11px; color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="grid">
+  <header class="card full">
+    <h1 id="symbol">NQ=F</h1>
+    <div id="price">—</div>
+    <div id="chg"></div>
+    <div id="meta">connecting…</div>
+  </header>
+
+  <div class="card" id="chartcard">
+    <h2>Today · 1-minute</h2>
+    <div id="chartwrap">
+      <canvas id="chart"></canvas>
+      <div id="tooltip"></div>
+    </div>
+    <div class="legend">
+      <span style="--c: var(--vwap)">VWAP</span>
+      <span style="--c: var(--ema-fast)">EMA 9</span>
+      <span style="--c: var(--ema-slow)">EMA 21</span>
+      <span style="--c: var(--level-user)">Your levels</span>
+      <span style="--c: var(--level-auto)">Auto levels</span>
+    </div>
+    <div id="err"></div>
+  </div>
+
+  <div>
+    <div class="card" style="margin-bottom:12px">
+      <h2>Bias</h2>
+      <div id="biaslabel">—</div>
+      <div id="biasscore"></div>
+      <div id="biascomps"></div>
+    </div>
+    <div class="card">
+      <h2>Chart levels</h2>
+      <label style="display:flex; gap:6px; align-items:center; font-size:12px; color:var(--ink-2); margin-bottom:8px">
+        <input type="checkbox" id="provenOnly" checked>
+        hide levels proven wrong today (≤51% of touches held)
+      </label>
+      <div id="levels"></div>
+      <div id="srcnote">Edit levels.json to change your levels.</div>
+    </div>
+  </div>
+
+  <div class="card full">
+    <h2>Strategy analyzer — today</h2>
+    <table id="bt">
+      <thead><tr>
+        <th>Strategy</th><th>Trades</th><th>Win %</th><th>Points</th>
+        <th>NQ $</th><th>MNQ $</th><th>PF</th><th>Max DD</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="srcnote2" class="lvl" style="border:none; font-size:11px; color:var(--muted)">
+      Next-bar-open fills, 1 contract, no costs. Analysis only — not trade advice.
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmt = (x, d = 2) => x == null ? "—" : x.toLocaleString("en-US",
+  { minimumFractionDigits: d, maximumFractionDigits: d });
+
+let snap = null;
+let hoverIdx = -1;
+const MIN_RIGHT = 0.51;
+
+function provenOnly() { return $("provenOnly").checked; }
+// Keep untested levels — only evidence against a level (≤51% bounce rate) hides it.
+function isProven(lv) { return lv.bounce_rate == null || lv.bounce_rate > MIN_RIGHT; }
+// Reversal entries, honoring the >51%-right filter when it's on.
+function visibleReversal() {
+  const all = snap.reversal || [];
+  return provenOnly() ? all.filter(isProven) : all;
+}
+
+function ema(vals, p) {
+  if (!vals.length) return [];
+  const k = 2 / (p + 1), out = [vals[0]];
+  for (let i = 1; i < vals.length; i++) out.push(vals[i] * k + out[out.length - 1] * (1 - k));
+  return out;
+}
+function vwapSeries(cs) {
+  let pv = 0, vv = 0;
+  return cs.map(c => {
+    const v = c.v || 1;
+    pv += ((c.h + c.l + c.c) / 3) * v; vv += v;
+    return pv / vv;
+  });
+}
+
+/* ---------- chart ---------- */
+const PADL = 8, PADR = 74, PADT = 10, PADB = 24;
+
+function drawChart() {
+  const canvas = $("chart");
+  const wrap = $("chartwrap");
+  const dpr = window.devicePixelRatio || 1;
+  const W = wrap.clientWidth, H = 440;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  if (!snap || !snap.candles.length) return;
+
+  const cs = snap.candles;
+  const plotW = W - PADL - PADR, plotH = H - PADT - PADB;
+  const levels = visibleReversal().map(r =>
+    ({ price: r.price, label: r.label, kind: r.user ? "user" : "auto" }));
+  let lo = Math.min(...cs.map(c => c.l));
+  let hi = Math.max(...cs.map(c => c.h));
+  // Include levels near the price action so lines don't silently clip.
+  const span0 = hi - lo;
+  for (const lv of levels) {
+    if (lv.price > lo - span0 * 0.3 && lv.price < hi + span0 * 0.3) {
+      lo = Math.min(lo, lv.price); hi = Math.max(hi, lv.price);
+    }
+  }
+  const pad = (hi - lo) * 0.04 || 1;
+  lo -= pad; hi += pad;
+  const x = i => PADL + (i + 0.5) / cs.length * plotW;
+  const y = p => PADT + (hi - p) / (hi - lo) * plotH;
+
+  // gridlines + right-edge price ticks
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.strokeStyle = css("--grid"); ctx.fillStyle = css("--muted");
+  ctx.lineWidth = 1;
+  const step = niceStep((hi - lo) / 6);
+  for (let p = Math.ceil(lo / step) * step; p < hi; p += step) {
+    ctx.beginPath(); ctx.moveTo(PADL, y(p)); ctx.lineTo(W - PADR, y(p)); ctx.stroke();
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText(fmt(p, 0), W - PADR + 6, y(p));
+  }
+  // time ticks (every ~60 bars)
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  const tstep = Math.max(30, Math.round(cs.length / 6 / 30) * 30);
+  for (let i = 0; i < cs.length; i += tstep) {
+    const d = new Date(cs[i].t * 1000);
+    ctx.fillText(d.toTimeString().slice(0, 5), x(i), H - PADB + 6);
+  }
+
+  // level lines (dashed, labeled at left, avoiding label collisions)
+  const usedLabelY = [];
+  const sortedLevels = [...levels].sort((a, b) => b.price - a.price);
+  for (const lv of sortedLevels) {
+    if (lv.price <= lo || lv.price >= hi) continue;
+    const user = lv.kind !== "auto";
+    const ly = y(lv.price);
+    ctx.strokeStyle = user ? css("--level-user") : css("--level-auto");
+    ctx.setLineDash(user ? [6, 4] : [2, 4]);
+    ctx.lineWidth = user ? 1.5 : 1;
+    ctx.beginPath(); ctx.moveTo(PADL, ly); ctx.lineTo(W - PADR, ly); ctx.stroke();
+    ctx.setLineDash([]);
+    // Prefer above the line; fall back below; skip text if both collide.
+    let labelY = null;
+    for (const cand of [ly - 2, ly + 12]) {
+      if (usedLabelY.every(u => Math.abs(u - cand) >= 11)) { labelY = cand; break; }
+    }
+    if (labelY !== null) {
+      usedLabelY.push(labelY);
+      ctx.fillStyle = user ? css("--level-user") : css("--muted");
+      ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillText(lv.label, PADL + 4, labelY);
+    }
+  }
+
+  // candles — 2px surface gap between bars
+  const bw = Math.max(1, plotW / cs.length - 2);
+  const upC = css("--up"), dnC = css("--down");
+  for (let i = 0; i < cs.length; i++) {
+    const c = cs[i], up = c.c >= c.o;
+    ctx.strokeStyle = ctx.fillStyle = up ? upC : dnC;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x(i), y(c.h)); ctx.lineTo(x(i), y(c.l)); ctx.stroke();
+    const top = y(Math.max(c.o, c.c)), bot = y(Math.min(c.o, c.c));
+    ctx.fillRect(x(i) - bw / 2, top, bw, Math.max(1, bot - top));
+  }
+
+  // overlays: VWAP, EMA9, EMA21 (2px lines)
+  const closes = cs.map(c => c.c);
+  drawLine(ctx, vwapSeries(cs), x, y, css("--vwap"), 2);
+  if (closes.length >= 21) {
+    drawLine(ctx, ema(closes, 9), x, y, css("--ema-fast"), 2);
+    drawLine(ctx, ema(closes, 21), x, y, css("--ema-slow"), 2);
+  }
+
+  // last-price marker on right edge
+  const last = closes[closes.length - 1];
+  ctx.fillStyle = last >= (snap.prev_close ?? last) ? upC : dnC;
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.font = "600 11px system-ui, sans-serif";
+  ctx.fillText(fmt(last), W - PADR + 6, Math.min(H - PADB - 6, Math.max(PADT + 6, y(last))));
+
+  // crosshair
+  if (hoverIdx >= 0 && hoverIdx < cs.length) {
+    ctx.strokeStyle = css("--baseline");
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(x(hoverIdx), PADT); ctx.lineTo(x(hoverIdx), H - PADB); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function drawLine(ctx, series, x, y, color, w) {
+  ctx.strokeStyle = color; ctx.lineWidth = w;
+  ctx.beginPath();
+  series.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+  ctx.stroke();
+}
+
+function niceStep(raw) {
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (raw <= m * mag) return m * mag;
+  return 10 * mag;
+}
+
+/* hover tooltip */
+$("chart").addEventListener("mousemove", e => {
+  if (!snap || !snap.candles.length) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const plotW = rect.width - PADL - PADR;
+  const i = Math.floor((e.clientX - rect.left - PADL) / plotW * snap.candles.length);
+  hoverIdx = Math.max(0, Math.min(snap.candles.length - 1, i));
+  const c = snap.candles[hoverIdx];
+  const tip = $("tooltip");
+  const d = new Date(c.t * 1000).toTimeString().slice(0, 5);
+  tip.innerHTML = `${d} &nbsp; O <b>${fmt(c.o)}</b> H <b>${fmt(c.h)}</b> ` +
+                  `L <b>${fmt(c.l)}</b> C <b>${fmt(c.c)}</b>`;
+  tip.style.display = "block";
+  const tx = Math.min(rect.width - tip.offsetWidth - 8, e.clientX - rect.left + 12);
+  tip.style.left = Math.max(4, tx) + "px";
+  tip.style.top = (e.clientY - rect.top - 34) + "px";
+  drawChart();
+});
+$("chart").addEventListener("mouseleave", () => {
+  hoverIdx = -1; $("tooltip").style.display = "none"; drawChart();
+});
+
+/* ---------- panels ---------- */
+const COMP_NAMES = { vwap: "VWAP", ema: "EMA 9/21", or: "Opening range",
+                     prev: "Prev close", momentum: "Momentum" };
+
+function renderHeader() {
+  $("symbol").textContent = snap.symbol;
+  $("price").textContent = fmt(snap.price);
+  const chg = $("chg");
+  if (snap.prev_close && snap.price != null) {
+    const d = snap.price - snap.prev_close;
+    chg.textContent = `${d >= 0 ? "▲" : "▼"} ${fmt(Math.abs(d))} (${fmt(d / snap.prev_close * 100)}%)`;
+    chg.className = d >= 0 ? "up" : "down";
+  } else chg.textContent = "";
+  const t = new Date(snap.ts * 1000).toLocaleTimeString();
+  $("meta").textContent = `${snap.source} · updated ${t}`;
+}
+
+function renderBias() {
+  const b = snap.bias;
+  $("biaslabel").textContent = b.label;
+  $("biaslabel").style.color =
+    b.score >= 1 ? css("--up") : b.score <= -1 ? css("--down") : css("--ink");
+  $("biasscore").textContent = `score ${b.score >= 0 ? "+" : ""}${b.score} / 5`;
+  $("biascomps").innerHTML = Object.entries(b.components).map(([k, v]) => {
+    const cls = v > 0 ? "pos" : v < 0 ? "neg" : "zero";
+    const sym = v > 0 ? "▲" : v < 0 ? "▼" : "·";
+    return `<div class="biasrow"><span class="arrow ${cls}">${sym}</span>${COMP_NAMES[k] || k}</div>`;
+  }).join("");
+}
+
+function renderLevels() {
+  const scored = visibleReversal().slice().sort((a, b) => b.price - a.price);
+  const hidden = (snap.reversal || []).length - scored.length;
+  const px = snap.price;
+  let html = "", inserted = false;
+  for (const lv of scored) {
+    if (!inserted && px != null && lv.price < px) {
+      html += `<div class="lvl" style="color:var(--ink)"><span>▸ price</span><b>${fmt(px)}</b></div>`;
+      inserted = true;
+    }
+    const c = lv.user ? "var(--level-user)" : "var(--muted)";
+    const weight = lv.rating === "HIGH" ? "700" : lv.rating === "MODERATE" ? "500" : "400";
+    const rate = lv.bounce_rate != null ? `${Math.round(lv.bounce_rate * 100)}% right` : "untested";
+    const badge = `<span style="font-weight:${weight}; font-size:11px" title="reversal confidence #${lv.rank} ` +
+      `(score ${lv.score}): ${lv.touches} touches, ${lv.bounces} bounces, ${lv.breaks} breaks">` +
+      `#${lv.rank} · ${rate}</span>`;
+    html += `<div class="lvl"><span style="color:${c}">${lv.label}</span>` +
+            `${badge}<b>${fmt(lv.price)}</b></div>`;
+  }
+  if (!scored.length) {
+    html = `<div class="lvl" style="color:var(--muted)">no levels — add yours to levels.json</div>`;
+  }
+  $("levels").innerHTML = html;
+  $("srcnote").textContent =
+    (provenOnly() && hidden ? `${hidden} hidden (proven ≤51% right today). ` : "") +
+    "right% = today's bounces/touches; untested = not reached yet. Edit levels.json to change your levels.";
+}
+
+let lastBt = null;
+function renderBacktest(bt) {
+  lastBt = bt;
+  let reports = bt.reports || [];
+  const total = reports.length;
+  if (provenOnly()) reports = reports.filter(r => r.win_rate > MIN_RIGHT * 100);
+  const note = document.querySelector("#srcnote2");
+  note.textContent = (provenOnly() && total - reports.length
+    ? `${total - reports.length} strategy(ies) hidden: win rate ≤ 51% today. `
+    : "") + "Next-bar-open fills, 1 contract, no costs. Analysis only — not trade advice.";
+  const rows = reports.map(r => {
+    const pcls = r.total_points > 0 ? "pos" : r.total_points < 0 ? "neg" : "";
+    return `<tr><td>${r.strategy}</td><td>${r.trades}</td><td>${r.win_rate}</td>` +
+      `<td class="${pcls}">${fmt(r.total_points)}</td>` +
+      `<td class="${pcls}">${fmt(r.pnl_nq_usd, 0)}</td>` +
+      `<td class="${pcls}">${fmt(r.pnl_mnq_usd, 0)}</td>` +
+      `<td>${r.profit_factor}</td><td>${fmt(r.max_drawdown_points)}</td></tr>`;
+  }).join("");
+  document.querySelector("#bt tbody").innerHTML = rows ||
+    `<tr><td colspan="8" style="color:var(--muted)">${
+      provenOnly() && total ? "no strategy won more than 51% of trades today"
+                            : "not enough candles yet"}</td></tr>`;
+}
+
+/* ---------- polling ---------- */
+// Add ?demo=1 to the page URL to force the synthetic session end-to-end.
+const API_QS = new URLSearchParams(location.search).get("demo") ? "?demo=1" : "";
+async function poll() {
+  try {
+    const r = await fetch("/api/snapshot" + API_QS);
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    snap = data;
+    $("err").style.display = "none";
+    renderHeader(); renderBias(); renderLevels(); drawChart();
+  } catch (e) {
+    $("err").textContent = "data error: " + e.message;
+    $("err").style.display = "block";
+    $("meta").textContent = "retrying…";
+  }
+}
+async function pollBacktest() {
+  try {
+    const r = await fetch("/api/backtest" + API_QS);
+    const data = await r.json();
+    if (!data.error) renderBacktest(data);
+  } catch (e) { /* transient */ }
+}
+
+poll(); pollBacktest();
+setInterval(poll, 15000);
+setInterval(pollBacktest, 60000);
+window.addEventListener("resize", drawChart);
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawChart);
+$("provenOnly").addEventListener("change", () => {
+  if (snap) { renderLevels(); drawChart(); }
+  if (lastBt) renderBacktest(lastBt);
+});
+</script>
+</body>
+</html>
