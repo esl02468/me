@@ -111,7 +111,7 @@ def main() -> int:
                     f"    {t.side:<6} {fmt_ts(t.entry_ts)} @ {t.entry:,.2f}"
                     f"  →  {fmt_ts(t.exit_ts)} @ {t.exit or 0:,.2f}   {pts} pts  [{t.reason}]"
                 )
-    print("\n  Fills are next-bar-open, 1 contract, no commissions/slippage. Analysis only.\n")
+    print("\n  Fills are next-bar-open, 1 contract, 0.75 pts/trade friction charged (NQ_COST_PTS). Analysis only.\n")
     return 0
 
 
