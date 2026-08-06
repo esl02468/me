@@ -32,6 +32,9 @@ from nq.backtest import run_all
 from nq.bias import compute_bias
 from nq.data import Session, get_chart_candles, get_session, nowcast_from_qqq
 from nq.levels import Level, compute_auto_levels, load_levels, save_levels
+from nq.journal import record_markers, stats as journal_stats
+from nq.news import in_blackout, upcoming as news_upcoming
+from nq.notify import enabled as notify_enabled, push as notify_push
 from nq.reversal import rank_levels
 
 ROOT = Path(__file__).parent
@@ -111,6 +114,10 @@ def build_snapshot(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
         "user_levels": user,
         "reversal": reversal,
         "live_estimate": est,
+        "news": {
+            "blackout": in_blackout(),
+            "upcoming": news_upcoming(hours=12)[:3],
+        },
     }
 
 
@@ -168,6 +175,9 @@ def build_signals(
                 "open": t.exit is None,
             })
     markers.sort(key=lambda m: m["ts"])
+    frame = f"R{rb}" if rb else tf
+    record_markers(sess.symbol, frame, markers)
+    _push_fresh_signals(sess.symbol, frame, markers)
     markers = markers[-MAX_MARKERS:]  # only the recent, actionable ones
     return {
         "tf": tf,
@@ -181,6 +191,26 @@ def build_signals(
         "unproven_fallback": fallback,
         "markers": markers,
     }
+
+
+_pushed: set = set()
+
+
+def _push_fresh_signals(symbol: str, frame: str, markers: list[dict]) -> None:
+    """Phone-push signals entered on (or right at) the newest bar, once each."""
+    if not notify_enabled() or not markers:
+        return
+    newest = markers[-1]
+    key = (symbol, frame, newest["strategy"], newest["ts"])
+    if key in _pushed or not newest.get("open"):
+        return
+    if time.time() - newest["ts"] > 180:  # stale — not actionable
+        return
+    _pushed.add(key)
+    notify_push(
+        f"{symbol} {frame}: {newest['strategy']} {newest['side'].upper()} @ {newest['price']:.2f}",
+        title="Signal", priority="high",
+    )
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -237,6 +267,9 @@ class Handler(BaseHTTPRequestHandler):
                                                    demo=True if _demo else None)
                     ],
                 }))
+            elif route == "/api/journal":
+                days = int(qs.get("days", ["30"])[0])
+                self._json({"days": days, "rows": journal_stats(days)})
             elif route == "/api/levels":
                 self._json({"levels": [asdict(l) for l in load_levels(symbol)]})
             else:

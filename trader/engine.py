@@ -33,6 +33,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from nq.backtest import STRATEGIES, backtest_level_bounce, session_level_prices  # noqa: E402
 from nq.bias import atr  # noqa: E402
 from nq.data import get_session  # noqa: E402
+from nq.news import in_blackout  # noqa: E402
+from nq.notify import push as notify_push  # noqa: E402
 from nq.strategies import extended_strategies  # noqa: E402
 from trader.risk import AccountState, PropRules, RiskManager  # noqa: E402
 from trader.tradovate import TradovateClient, TradovateError  # noqa: E402
@@ -105,7 +107,10 @@ def main() -> int:
     while True:
         try:
             sess = get_session(demo=True if args.demo_data else None)
-            sig = latest_signal(sess, strategy)
+            blackout = in_blackout()
+            if blackout:
+                log(f"news blackout ({blackout}) — no new entries")
+            sig = None if blackout else latest_signal(sess, strategy)
             a = atr(sess.candles) or 5.0
             if sig and sig.entry_ts != last_entry_ts:
                 last_entry_ts = sig.entry_ts
@@ -126,6 +131,7 @@ def main() -> int:
                         try:
                             out = client.place_bracket(acc["account_id"], symbol, qty, side, tp, sl)
                             log(f"  {name}: order sent -> {out}")
+                            notify_push(f"{name}: {side} {qty} {symbol} @ ~{sig.entry:.2f}", title="Order sent")
                         except TradovateError as e:
                             log(f"  {name}: ORDER FAILED — {e}")
             for acc in cfg.get("accounts", []):

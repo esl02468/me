@@ -1,0 +1,10 @@
+{
+  "_comment": "High-impact releases you want trade blackouts around. Times include the UTC offset (America/New_York is -04:00 in summer, -05:00 in winter). NFP first-Fridays are added automatically - do not list them here.",
+  "events": [
+    {"time": "2026-08-12T08:30:00-04:00", "label": "CPI"},
+    {"time": "2026-09-11T08:30:00-04:00", "label": "CPI"},
+    {"time": "2026-09-16T14:00:00-04:00", "label": "FOMC rate decision"},
+    {"time": "2026-10-28T14:00:00-04:00", "label": "FOMC rate decision"},
+    {"time": "2026-12-09T14:00:00-05:00", "label": "FOMC rate decision"}
+  ]
+}

@@ -20,6 +20,13 @@ POINT_VALUE_NQ = 20.0
 POINT_VALUE_MNQ = 2.0
 OPENING_RANGE_BARS = 15
 
+# Per-round-trip friction in points: ~$1.60 RT commission on MNQ plus a
+# tick or two of slippage. Charged against every closed trade so win
+# rates and profit factors are net, not flattering. Override: NQ_COST_PTS.
+import os as _os
+
+COST_POINTS = float(_os.environ.get("NQ_COST_PTS", "0.75"))
+
 
 @dataclass
 class Trade:
@@ -32,10 +39,15 @@ class Trade:
 
     @property
     def points(self) -> float:
+        """Net points after per-trade friction (COST_POINTS)."""
         if self.exit is None:
             return 0.0
         sign = 1 if self.side == "long" else -1
-        return sign * (self.exit - self.entry)
+        return sign * (self.exit - self.entry) - COST_POINTS
+
+    @property
+    def gross_points(self) -> float:
+        return self.points + COST_POINTS if self.exit is not None else 0.0
 
 
 @dataclass
@@ -75,6 +87,7 @@ class Report:
 
     def summary(self) -> dict:
         return {
+            "cost_pts": COST_POINTS,
             "strategy": self.strategy,
             "trades": len(self.closed),
             "win_rate": round(self.win_rate * 100, 1),

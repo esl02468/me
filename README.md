@@ -165,6 +165,44 @@ account defaults to false; enable it only after reading your firm's
 current policy. The risk module enforces loss limits — it cannot make
 automation allowed.
 
+## Track record — the signal journal
+
+Every closed signal is recorded once in `journal.db` (SQLite, gitignored;
+`NQ_JOURNAL_PATH` to relocate, `NQ_JOURNAL=0` to disable) on the machine
+running the server — the VPS, running 24/7, is where it accumulates. The
+dashboard's Track Record card and `python3 -m nq.journal --days 90` show
+per-strategy/per-frame win rates and net points across days. This is the
+record that turns "proven today" into "proven, period" — demand weeks of
+active days before automating anything.
+
+## Costs
+
+Backtests charge 0.75 points of friction per closed trade (≈ MNQ round-trip
+commission + a tick of slippage; override with `NQ_COST_PTS`). Win rates,
+profit factors, signal qualification, and the journal are all net.
+
+## News guard
+
+`news.json` holds dated high-impact releases (CPI, FOMC, ...) and NFP
+first-Fridays are added automatically. Within a window (5 min before to
+10 min after; `NQ_NEWS_BEFORE_MIN`/`NQ_NEWS_AFTER_MIN`) the dashboard
+shows a blackout banner and the trading engine refuses new entries. An
+upcoming release inside the hour shows a countdown warning and triggers an
+audio caution at 10 minutes. Keep news.json current from your calendar.
+
+## Phone push (free, no AI)
+
+Set `NQ_NTFY_TOPIC` to a long random topic name and subscribe to it in
+the free ntfy app — fresh chart signals and engine order confirmations
+push to your phone via ntfy.sh. The topic name is the password; keep it
+secret.
+
+## Position sizing
+
+The dashboard's Position Size card converts your stop distance and dollar
+risk into MNQ ($2/pt) and NQ ($20/pt) contract counts — sized to what your
+account's remaining loss room actually allows.
+
 ## Reversal-likelihood ranking
 
 `python3 rank_levels.py` scores every level (yours + auto) on how likely it

@@ -136,6 +136,7 @@
     <div id="est" style="font-size:13px; color:var(--vwap); font-weight:600"></div>
     <div id="meta">connecting…</div>
   </header>
+  <div class="card full" id="newsbar" style="display:none; padding:8px 16px; font-size:13px; font-weight:600"></div>
 
   <div class="card" id="chartcard">
     <h2>Chart <span style="font-weight:400; text-transform:none; letter-spacing:0">— scroll to zoom · drag to pan · double-click to reset</span></h2>
@@ -184,6 +185,16 @@
       <div id="biasscore"></div>
       <div id="biascomps"></div>
     </div>
+    <div class="card" style="margin-bottom:12px">
+      <h2>Position size</h2>
+      <div style="display:flex; gap:8px; font-size:12.5px; color:var(--ink-2); align-items:center; flex-wrap:wrap">
+        <label>stop <input id="szStop" type="number" value="25" min="1" style="width:58px"> pts</label>
+        <label>risk $ <input id="szRisk" type="number" value="200" min="10" step="10" style="width:70px"></label>
+      </div>
+      <div id="szOut" style="font-size:13px; margin-top:8px; color:var(--ink)"></div>
+      <div style="font-size:11px; color:var(--muted); margin-top:6px">
+        Size to your prop account's remaining daily-loss room, not to hope.</div>
+    </div>
     <div class="card">
       <h2>Chart levels</h2>
       <label style="display:flex; gap:6px; align-items:center; font-size:12px; color:var(--ink-2); margin-bottom:8px">
@@ -196,6 +207,15 @@
   </div>
 
   <div class="card full">
+    <h2>Track record — signal journal</h2>
+    <table id="journal"><thead><tr>
+      <th>Strategy</th><th>Frame</th><th>Symbol</th><th>Days</th><th>Trades</th><th>Win %</th><th>Net pts</th>
+    </tr></thead><tbody></tbody></table>
+    <div class="lvl" style="border:none; font-size:11px; color:var(--muted)">
+      Accumulates on the machine running the server (VPS). Trust needs weeks of active days, not one hot session.</div>
+  </div>
+
+  <div class="card full">
     <h2>Strategy analyzer — today</h2>
     <table id="bt">
       <thead><tr>
@@ -205,7 +225,7 @@
       <tbody></tbody>
     </table>
     <div id="srcnote2" class="lvl" style="border:none; font-size:11px; color:var(--muted)">
-      Next-bar-open fills, 1 contract, no costs. Analysis only — not trade advice.
+      Next-bar-open fills, 1 contract, 0.75 pts/trade cost charged. Analysis only — not trade advice.
     </div>
   </div>
 </div>
@@ -705,7 +725,7 @@ function renderBacktest(bt) {
   const note = document.querySelector("#srcnote2");
   note.textContent = (provenOnly() && total - reports.length
     ? `${total - reports.length} strategy(ies) hidden: win rate ≤ 51% today. `
-    : "") + "Next-bar-open fills, 1 contract, no costs. Analysis only — not trade advice.";
+    : "") + "Next-bar-open fills, 1 contract, 0.75 pts/trade cost charged. Analysis only — not trade advice.";
   const rows = reports.map(r => {
     const pcls = r.total_points > 0 ? "pos" : r.total_points < 0 ? "neg" : "";
     return `<tr><td>${r.strategy}</td><td>${r.trades}</td><td>${r.win_rate}</td>` +
@@ -762,7 +782,65 @@ document.addEventListener("DOMContentLoaded", () => {
     snap = null; sigData = null; chartSel = { tf: chartSel.tf, rb: chartSel.rb, candles: null };
     view = null; alerted.clear(); prevPollPrice = null; lastBiasLabel = null;
     $("price").textContent = "—"; $("meta").textContent = "loading " + SYM + "…";
-    poll(); pollBacktest(); pollSignals();
+    /* ---------- position sizing (client-side, MNQ $2/pt, NQ $20/pt) ---------- */
+function renderSize() {
+  const stop = Math.max(0.25, +$("szStop").value || 0);
+  const risk = Math.max(1, +$("szRisk").value || 0);
+  const perMnq = stop * 2, perNq = stop * 20;
+  const mnq = Math.floor(risk / perMnq), nq = Math.floor(risk / perNq);
+  $("szOut").innerHTML = nq >= 1
+    ? `<b>${nq}× NQ</b> (risks ${fmt(nq * perNq, 0)}) or <b>${mnq}× MNQ</b> (risks ${fmt(mnq * perMnq, 0)})`
+    : mnq >= 1
+      ? `<b>${mnq}× MNQ</b> (risks ${fmt(mnq * perMnq, 0)}) — NQ too big for this risk`
+      : `stop too wide — even 1 MNQ risks ${fmt(perMnq, 0)}`;
+}
+$("szStop").addEventListener("input", renderSize);
+$("szRisk").addEventListener("input", renderSize);
+renderSize();
+
+/* ---------- news guard banner ---------- */
+let newsWarned = 0;
+function renderNews() {
+  const bar = $("newsbar");
+  const n = snap && snap.news;
+  if (!n) { bar.style.display = "none"; return; }
+  if (n.blackout) {
+    bar.style.display = "block";
+    bar.style.color = css("--down");
+    bar.textContent = `⛔ NEWS BLACKOUT: ${n.blackout} — reversal signals unreliable right now; automation holds fire.`;
+  } else if (n.upcoming && n.upcoming.length && n.upcoming[0].minutes_away <= 60) {
+    const e = n.upcoming[0];
+    bar.style.display = "block";
+    bar.style.color = css("--ink-2");
+    bar.textContent = `⚠ ${e.label} in ${Math.round(e.minutes_away)} min — expect volatility; new positions get stopped-out fast around releases.`;
+    if (e.minutes_away <= 10 && Date.now() - newsWarned > 600000) {
+      newsWarned = Date.now();
+      beep([880, 660, 880], 0.15);
+    }
+  } else bar.style.display = "none";
+}
+
+/* ---------- journal (multi-day track record) ---------- */
+async function pollJournal() {
+  try {
+    const r = await fetch("/api/journal" + apiQs({ days: 30 }));
+    const data = await r.json();
+    const tb = document.querySelector("#journal tbody");
+    if (!data.rows || !data.rows.length) {
+      tb.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">journal empty — fills as the server runs day after day</td></tr>`;
+      return;
+    }
+    tb.innerHTML = data.rows.map(r2 => {
+      const pcls = r2.points > 0 ? "pos" : r2.points < 0 ? "neg" : "";
+      return `<tr><td>${r2.strategy}</td><td>${r2.frame}</td><td>${r2.symbol}</td>` +
+        `<td>${r2.days_active}</td><td>${r2.trades}</td><td>${r2.win_rate}</td>` +
+        `<td class="${pcls}">${fmt(r2.points)}</td></tr>`;
+    }).join("");
+  } catch (e) { /* transient */ }
+}
+
+poll(); pollBacktest(); pollSignals(); pollJournal();
+setInterval(pollJournal, 120000);
   });
   document.querySelectorAll(".ind").forEach(b => {
     b.classList.toggle("active", indOn(b.dataset.ind));
@@ -782,7 +860,7 @@ async function poll() {
     snap = data;
     $("err").style.display = "none";
     maintainFollow();
-    renderHeader(); renderBias(); renderLevels(); drawChart();
+    renderHeader(); renderBias(); renderLevels(); renderNews(); drawChart();
     fetchChartCandles();
     checkAlerts();
   } catch (e) {
@@ -875,7 +953,65 @@ function checkAlerts() {
   prevPollPrice = px;
 }
 
-poll(); pollBacktest(); pollSignals();
+/* ---------- position sizing (client-side, MNQ $2/pt, NQ $20/pt) ---------- */
+function renderSize() {
+  const stop = Math.max(0.25, +$("szStop").value || 0);
+  const risk = Math.max(1, +$("szRisk").value || 0);
+  const perMnq = stop * 2, perNq = stop * 20;
+  const mnq = Math.floor(risk / perMnq), nq = Math.floor(risk / perNq);
+  $("szOut").innerHTML = nq >= 1
+    ? `<b>${nq}× NQ</b> (risks ${fmt(nq * perNq, 0)}) or <b>${mnq}× MNQ</b> (risks ${fmt(mnq * perMnq, 0)})`
+    : mnq >= 1
+      ? `<b>${mnq}× MNQ</b> (risks ${fmt(mnq * perMnq, 0)}) — NQ too big for this risk`
+      : `stop too wide — even 1 MNQ risks ${fmt(perMnq, 0)}`;
+}
+$("szStop").addEventListener("input", renderSize);
+$("szRisk").addEventListener("input", renderSize);
+renderSize();
+
+/* ---------- news guard banner ---------- */
+let newsWarned = 0;
+function renderNews() {
+  const bar = $("newsbar");
+  const n = snap && snap.news;
+  if (!n) { bar.style.display = "none"; return; }
+  if (n.blackout) {
+    bar.style.display = "block";
+    bar.style.color = css("--down");
+    bar.textContent = `⛔ NEWS BLACKOUT: ${n.blackout} — reversal signals unreliable right now; automation holds fire.`;
+  } else if (n.upcoming && n.upcoming.length && n.upcoming[0].minutes_away <= 60) {
+    const e = n.upcoming[0];
+    bar.style.display = "block";
+    bar.style.color = css("--ink-2");
+    bar.textContent = `⚠ ${e.label} in ${Math.round(e.minutes_away)} min — expect volatility; new positions get stopped-out fast around releases.`;
+    if (e.minutes_away <= 10 && Date.now() - newsWarned > 600000) {
+      newsWarned = Date.now();
+      beep([880, 660, 880], 0.15);
+    }
+  } else bar.style.display = "none";
+}
+
+/* ---------- journal (multi-day track record) ---------- */
+async function pollJournal() {
+  try {
+    const r = await fetch("/api/journal" + apiQs({ days: 30 }));
+    const data = await r.json();
+    const tb = document.querySelector("#journal tbody");
+    if (!data.rows || !data.rows.length) {
+      tb.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">journal empty — fills as the server runs day after day</td></tr>`;
+      return;
+    }
+    tb.innerHTML = data.rows.map(r2 => {
+      const pcls = r2.points > 0 ? "pos" : r2.points < 0 ? "neg" : "";
+      return `<tr><td>${r2.strategy}</td><td>${r2.frame}</td><td>${r2.symbol}</td>` +
+        `<td>${r2.days_active}</td><td>${r2.trades}</td><td>${r2.win_rate}</td>` +
+        `<td class="${pcls}">${fmt(r2.points)}</td></tr>`;
+    }).join("");
+  } catch (e) { /* transient */ }
+}
+
+poll(); pollBacktest(); pollSignals(); pollJournal();
+setInterval(pollJournal, 120000);
 setInterval(poll, 15000);
 setInterval(pollBacktest, 60000);
 setInterval(pollSignals, 60000);
