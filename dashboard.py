@@ -29,9 +29,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from nq.backtest import run_all
-from nq.bias import OPENING_RANGE_BARS, compute_bias, vwap
-from nq.data import Session, get_session
-from nq.levels import Level, load_levels, save_levels
+from nq.bias import compute_bias
+from nq.data import Session, get_chart_candles, get_session, nowcast_from_qqq
+from nq.levels import Level, compute_auto_levels, load_levels, save_levels
 from nq.reversal import rank_levels
 
 ROOT = Path(__file__).parent
@@ -56,22 +56,7 @@ def _cached(key: str, ttl: float, builder):
     return value
 
 
-def _auto_levels(sess: Session) -> list[dict]:
-    """Computed session levels: PDH/PDL, prev close, VWAP, opening range."""
-    out = []
-    if sess.prev_high:
-        out.append({"price": round(sess.prev_high, 2), "label": "PDH", "kind": "auto"})
-    if sess.prev_low:
-        out.append({"price": round(sess.prev_low, 2), "label": "PDL", "kind": "auto"})
-    if sess.prev_close:
-        out.append({"price": round(sess.prev_close, 2), "label": "Prev close", "kind": "auto"})
-    if sess.candles:
-        out.append({"price": round(vwap(sess.candles)[-1], 2), "label": "VWAP", "kind": "auto"})
-    if len(sess.candles) >= OPENING_RANGE_BARS:
-        or_bars = sess.candles[:OPENING_RANGE_BARS]
-        out.append({"price": round(max(c.high for c in or_bars), 2), "label": "OR high", "kind": "auto"})
-        out.append({"price": round(min(c.low for c in or_bars), 2), "label": "OR low", "kind": "auto"})
-    return out
+_auto_levels = compute_auto_levels
 
 
 def build_snapshot(demo: bool | None = None) -> dict:
@@ -79,6 +64,12 @@ def build_snapshot(demo: bool | None = None) -> dict:
         demo = True if _demo else None
     sess: Session = get_session(demo=demo)
     bias = compute_bias(sess)
+    if sess.source == "yahoo":
+        est = nowcast_from_qqq(sess)
+    elif sess.source == "demo" and sess.last:
+        est = {"price": round(sess.last + 1.75, 2), "basis": "demo nowcast"}
+    else:
+        est = None
     auto = _auto_levels(sess)
     user = [asdict(l) for l in load_levels()]
     reversal = [
@@ -109,6 +100,7 @@ def build_snapshot(demo: bool | None = None) -> dict:
         "auto_levels": auto,
         "user_levels": user,
         "reversal": reversal,
+        "live_estimate": est,
     }
 
 
@@ -156,6 +148,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(_cached("snapshot", CACHE_TTL, build_snapshot))
             elif route == "/api/backtest":
                 self._json(_cached("backtest", 30.0, build_backtest))
+            elif route == "/api/candles":
+                qs = parse_qs(urlparse(self.path).query)
+                tf = qs.get("tf", ["1m"])[0]
+                rb = qs.get("rb", [None])[0]
+                rb_val = float(rb) if rb else None
+                key = f"candles:{tf}:{rb_val}"
+                self._json(_cached(key, CACHE_TTL, lambda: {
+                    "tf": tf, "rb": rb_val,
+                    "candles": [
+                        {"t": c.ts, "o": c.open, "h": c.high, "l": c.low, "c": c.close, "v": c.volume}
+                        for c in get_chart_candles(tf, rb_val, demo=True if _demo else None)
+                    ],
+                }))
             elif route == "/api/levels":
                 self._json({"levels": [asdict(l) for l in load_levels()]})
             else:

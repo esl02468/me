@@ -16,7 +16,7 @@ import json
 import sys
 from datetime import datetime, timezone
 
-from nq.backtest import STRATEGIES, run_all
+from nq.backtest import run_all
 from nq.data import get_session
 
 
@@ -28,7 +28,7 @@ def fmt_ts(ts: int | None) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--strategy", choices=sorted(STRATEGIES), help="run a single strategy")
+    ap.add_argument("--strategy", help="only strategies whose name starts with this")
     ap.add_argument("--demo", action="store_true", help="synthetic data, no network")
     ap.add_argument("--trades", action="store_true", help="print per-trade log")
     ap.add_argument("--json", action="store_true", dest="as_json")
@@ -48,10 +48,12 @@ def main() -> int:
         )
         return 1
 
+    reports = run_all(sess)
     if args.strategy:
-        reports = [STRATEGIES[args.strategy](sess.candles)]
-    else:
-        reports = run_all(sess)
+        reports = [r for r in reports if r.strategy.startswith(args.strategy)]
+        if not reports:
+            print(f"error: no strategy named like {args.strategy!r}", file=sys.stderr)
+            return 1
 
     if args.as_json:
         print(

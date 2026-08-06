@@ -50,6 +50,9 @@ class Session:
     prev_close: float | None = None
     prev_high: float | None = None
     prev_low: float | None = None
+    prev_open: float | None = None
+    week_high: float | None = None
+    week_low: float | None = None
     source: str = "unknown"
 
     @property
@@ -89,15 +92,21 @@ def fetch_yahoo_session(
     return sess
 
 
-def fetch_yahoo_prev_day(symbol: str = DEFAULT_SYMBOL) -> tuple[float | None, float | None]:
-    """Prior-day high/low from the 5-day daily series."""
+def fetch_yahoo_daily_context(symbol: str = DEFAULT_SYMBOL) -> dict:
+    """Prior-day OHLC and rolling 5-day (weekly) range from the daily series."""
     url = YAHOO_URL.format(symbol=urllib.parse.quote(symbol), interval="1d", range="5d")
     payload = json.loads(_http_get(url))
     candles, _ = _parse_yahoo(payload)
+    out: dict = {}
     if len(candles) >= 2:
         prev = candles[-2]
-        return prev.high, prev.low
-    return None, None
+        out.update(prev_open=prev.open, prev_high=prev.high,
+                   prev_low=prev.low, prev_close=prev.close)
+    past = candles[:-1] or candles
+    if past:
+        out.update(week_high=max(c.high for c in past),
+                   week_low=min(c.low for c in past))
+    return out
 
 
 def fetch_stooq_quote(symbol: str = STOOQ_SYMBOL) -> float | None:
@@ -155,11 +164,141 @@ def demo_session(symbol: str = DEFAULT_SYMBOL, minutes: int = 390, seed: int = 4
     sess.prev_close = round(base - drift * 40 + rng.gauss(0, 25), 2)
     sess.prev_high = round(max(sess.prev_close, base) + 60, 2)
     sess.prev_low = round(min(sess.prev_close, base) - 60, 2)
+    sess.prev_open = round(sess.prev_close - drift * 30 + rng.gauss(0, 20), 2)
+    sess.week_high = round(sess.prev_high + 85, 2)
+    sess.week_low = round(sess.prev_low - 110, 2)
     return sess
 
 
 def is_demo() -> bool:
     return os.environ.get("NQ_DEMO", "").strip() in ("1", "true", "yes")
+
+
+def nowcast_from_qqq(fut_session: Session) -> dict | None:
+    """Free real-time NQ estimate: Yahoo serves QQQ (Nasdaq-100 ETF) quotes
+    in real time while CME futures are ~15 min delayed. Compute the NQ/QQQ
+    ratio over the timestamps both series share, then apply it to QQQ's
+    latest print. An estimate for charting/alerts — never for execution."""
+    try:
+        qqq = fetch_yahoo_session("QQQ")
+    except (urllib.error.URLError, KeyError, ValueError, OSError):
+        return None
+    fut_by_ts = {c.ts: c.close for c in fut_session.candles}
+    ratios = [fut_by_ts[c.ts] / c.close for c in qqq.candles if c.ts in fut_by_ts and c.close]
+    if len(ratios) < 5 or not qqq.candles:
+        return None
+    tail = ratios[-30:]
+    ratio = sum(tail) / len(tail)
+    last = qqq.candles[-1]
+    return {
+        "price": round(last.close * ratio, 2),
+        "ratio": round(ratio, 4),
+        "qqq": round(last.close, 2),
+        "qqq_ts": last.ts,
+        "basis": "QQQ nowcast",
+    }
+
+
+# Chart timeframes: tf -> (yahoo interval, yahoo range)
+TF_MAP = {
+    "1m": ("1m", "1d"),
+    "5m": ("5m", "5d"),
+    "15m": ("15m", "5d"),
+    "1h": ("60m", "1mo"),
+    "1d": ("1d", "6mo"),
+}
+RANGE_BAR_SIZES = (2.0, 5.0, 10.0)  # points
+
+
+def aggregate_candles(candles: list[Candle], seconds: int) -> list[Candle]:
+    """Bucket 1m candles into a larger fixed timeframe."""
+    out: list[Candle] = []
+    for c in candles:
+        bucket = c.ts - (c.ts % seconds)
+        if out and out[-1].ts == bucket:
+            last = out[-1]
+            last.high = max(last.high, c.high)
+            last.low = min(last.low, c.low)
+            last.close = c.close
+            last.volume += c.volume
+        else:
+            out.append(Candle(bucket, c.open, c.high, c.low, c.close, c.volume))
+    return out
+
+
+def build_range_bars(candles: list[Candle], rng: float) -> list[Candle]:
+    """Approximate range bars from 1m candles.
+
+    Each 1m bar's path is approximated as open -> nearer extreme -> farther
+    extreme -> close; a bar closes whenever its high-low span reaches `rng`.
+    """
+    bars: list[Candle] = []
+    o = h = l = None
+    ts = 0
+    for c in candles:
+        seq = (c.open, c.low, c.high, c.close) if c.close >= c.open else (c.open, c.high, c.low, c.close)
+        for p in seq:
+            if o is None:
+                o = h = l = p
+                ts = c.ts
+                continue
+            h = max(h, p)
+            l = min(l, p)
+            while h - l >= rng:
+                if p >= l + rng:  # filled upward
+                    bars.append(Candle(ts, round(o, 2), round(l + rng, 2), round(l, 2), round(l + rng, 2)))
+                    o = l + rng
+                else:  # filled downward
+                    bars.append(Candle(ts, round(o, 2), round(h, 2), round(h - rng, 2), round(h - rng, 2)))
+                    o = h - rng
+                ts = c.ts
+                h = max(o, p)
+                l = min(o, p)
+    if o is not None and (not bars or bars[-1].ts != ts or bars[-1].close != o or h != l):
+        bars.append(Candle(ts, round(o, 2), round(h, 2), round(l, 2), round(candles[-1].close, 2)))
+    return bars
+
+
+def demo_daily(symbol: str = DEFAULT_SYMBOL, days: int = 120, seed: int = 7) -> list[Candle]:
+    rng = random.Random(seed)
+    price = 22_400.0
+    now = int(time.time())
+    out = []
+    for i in range(days):
+        drift = rng.gauss(8, 90)
+        o = price
+        c = o + drift
+        h = max(o, c) + abs(rng.gauss(0, 60))
+        l = min(o, c) - abs(rng.gauss(0, 60))
+        out.append(Candle(now - (days - i) * 86400, round(o, 2), round(h, 2), round(l, 2), round(c, 2), rng.randint(200000, 600000)))
+        price = c
+    return out
+
+
+def get_chart_candles(
+    tf: str = "1m", range_pts: float | None = None,
+    symbol: str = DEFAULT_SYMBOL, demo: bool | None = None,
+) -> list[Candle]:
+    """Candles for the chart: a fixed timeframe from TF_MAP, or range bars
+    built from today's 1m data when `range_pts` is set."""
+    if demo is None:
+        demo = is_demo()
+    if range_pts:
+        base = demo_session(symbol).candles if demo else fetch_yahoo_session(symbol).candles
+        return build_range_bars(base, float(range_pts))
+    if tf not in TF_MAP:
+        raise ValueError(f"unknown timeframe {tf!r} (use {'/'.join(TF_MAP)} or range bars)")
+    if demo:
+        if tf == "1d":
+            return demo_daily(symbol)
+        if tf == "1m":
+            return demo_session(symbol).candles
+        mins = {"5m": 5, "15m": 15, "1h": 60}[tf]
+        days = 5 if tf in ("5m", "15m") else 21
+        long_sess = demo_session(symbol, minutes=390 * days, seed=11)
+        return aggregate_candles(long_sess.candles, mins * 60)
+    interval, day_range = TF_MAP[tf]
+    return fetch_yahoo_session(symbol, interval=interval, day_range=day_range).candles
 
 
 def get_session(symbol: str = DEFAULT_SYMBOL, demo: bool | None = None) -> Session:
@@ -171,7 +310,13 @@ def get_session(symbol: str = DEFAULT_SYMBOL, demo: bool | None = None) -> Sessi
     try:
         sess = fetch_yahoo_session(symbol)
         try:
-            sess.prev_high, sess.prev_low = fetch_yahoo_prev_day(symbol)
+            ctx = fetch_yahoo_daily_context(symbol)
+            sess.prev_open = ctx.get("prev_open")
+            sess.prev_high = ctx.get("prev_high")
+            sess.prev_low = ctx.get("prev_low")
+            sess.prev_close = ctx.get("prev_close") or sess.prev_close
+            sess.week_high = ctx.get("week_high")
+            sess.week_low = ctx.get("week_low")
         except (urllib.error.URLError, KeyError, OSError):
             pass
         if sess.candles:
