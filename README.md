@@ -102,8 +102,11 @@ ETF proxy (NQ→QQQ, ES→SPY, YM→DIA, RTY→IWM, GC→GLD, CL→USO...).
 
 ## Trading signals on the chart
 
-The Signals chip draws entry/exit markers from the strategies proven >51%
-win rate with ≥3 closed trades **today** (falling back to the two best
+Signals run on **whatever series the chart shows** — every timeframe (1m
+through 1D) and every range-bar frame — with bar-based strategy parameters
+adapting to the bar size, TradingView-indicator style. The Signals chip
+draws entry/exit markers from the strategies proven >51% win rate with ≥3
+closed trades **on that series today** (falling back to the two best
 available, labeled unproven, when none qualify): ▲ long entries, ▼ short
 entries, dashed connectors to × exits colored by result, ○ still-open
 trades. A summary line names the qualifying strategies with their live win
@@ -116,6 +119,10 @@ pans, double-click resets. The crosshair shows a dynamic date-time badge on
 the time axis and a price badge on the price axis. Timeframe toggle: 1m /
 5m / 15m / 1h / 1D plus range bars (R2 / R5 / R10 points, built from 1m
 data). Horizontal scroll (trackpad swipe or shift+wheel) pans the chart.
+The **F** button (top right of the chart) jumps to the newest bars and
+keeps auto-following in real time at your current zoom, best-fit scaled;
+panning or zooming away from the right edge disengages it, F or
+double-click re-engages.
 Indicator chips toggle VWAP, EMA 9/21, Bollinger bands (20, 2σ, shaded),
 and the volume pane. Each level keeps one identity color, matched exactly
 between the chart line and the swatch in the Chart Levels card; thick

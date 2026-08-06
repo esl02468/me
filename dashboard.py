@@ -23,7 +23,7 @@ import json
 import os
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -117,13 +117,21 @@ def build_backtest(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
     }
 
 
-def build_signals(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
-    """Entry/exit markers from strategies earning trust today: everything
-    with win rate > 51% and >= 3 closed trades; if none qualify, the top 2
-    by win rate with >= 3 trades, flagged unproven."""
+def build_signals(
+    demo: bool | None = None, symbol: str = "NQ=F",
+    tf: str = "1m", rb: float | None = None,
+) -> dict:
+    """Entry/exit markers from strategies earning trust on the DISPLAYED
+    series (any timeframe or range-bar frame): everything with win rate
+    > 51% and >= 3 closed trades; if none qualify, the top 2 by win rate
+    with >= 3 trades, flagged unproven. Bar-based strategy parameters
+    (EMA 9/21, 20-bar channels, ...) adapt to the bar size, TradingView
+    indicator style."""
     if demo is None:
         demo = True if _demo else None
     sess: Session = get_session(symbol=symbol, demo=demo)
+    if rb or tf != "1m":
+        sess = replace(sess, candles=get_chart_candles(tf, rb, symbol=symbol, demo=demo))
     reports = run_all(sess)
     qualified = [r for r in reports if r.win_rate > 0.51 and len(r.closed) >= 3]
     fallback = not qualified
@@ -147,6 +155,8 @@ def build_signals(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
             })
     markers.sort(key=lambda m: m["ts"])
     return {
+        "tf": tf,
+        "rb": rb,
         "symbol": sess.symbol,
         "strategies": [
             {"name": r.strategy.split("(")[0], "win_rate": round(r.win_rate * 100, 1),
@@ -194,8 +204,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(_cached(f"backtest:{symbol}", 30.0,
                                    lambda: build_backtest(symbol=symbol)))
             elif route == "/api/signals":
-                self._json(_cached(f"signals:{symbol}", 30.0,
-                                   lambda: build_signals(symbol=symbol)))
+                tf = qs.get("tf", ["1m"])[0]
+                rb = qs.get("rb", [None])[0]
+                rb_val = float(rb) if rb else None
+                self._json(_cached(f"signals:{symbol}:{tf}:{rb_val}", 30.0,
+                                   lambda: build_signals(symbol=symbol, tf=tf, rb=rb_val)))
             elif route == "/api/candles":
                 tf = qs.get("tf", ["1m"])[0]
                 rb = qs.get("rb", [None])[0]

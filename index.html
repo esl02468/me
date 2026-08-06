@@ -161,6 +161,8 @@
     <div id="chartwrap">
       <canvas id="chart"></canvas>
       <div id="tooltip"></div>
+      <button id="followBtn" class="tfbtn active" title="Follow realtime: jump to the newest bars and auto-scroll as data arrives"
+              style="position:absolute; top:8px; right:84px; z-index:4; font-weight:700">F</button>
     </div>
     <div class="legend">
       <span style="--c: var(--vwap)">VWAP</span>
@@ -255,7 +257,7 @@ async function fetchChartCandles() {
   try {
     const r = await fetch("/api/candles" + apiQs(chartSel.rb ? { rb: chartSel.rb } : { tf: chartSel.tf }));
     const data = await r.json();
-    if (!data.error) { chartSel.candles = data.candles; drawChart(); }
+    if (!data.error) { chartSel.candles = data.candles; maintainFollow(); drawChart(); }
   } catch (e) { /* transient */ }
 }
 document.querySelectorAll(".tfbtn").forEach(b => b.addEventListener("click", () => {
@@ -263,9 +265,25 @@ document.querySelectorAll(".tfbtn").forEach(b => b.addEventListener("click", () 
   b.classList.add("active");
   chartSel = { tf: b.dataset.tf || "1m", rb: b.dataset.rb ? +b.dataset.rb : null, candles: null };
   view = null;
+  follow = true; updateFollowBtn();
   fetchChartCandles();
+  pollSignals();
 }));
 let view = null;      // {start, end} candle indices; null = follow the full session
+let follow = true;    // auto-scroll to the newest bar as data arrives
+function updateFollowBtn() { $("followBtn").classList.toggle("active", follow); }
+function maintainFollow() {
+  if (!follow || !view) return;
+  const n = chartData().length;
+  const width = view.end - view.start;
+  view = width >= n ? null : { start: Math.max(0, n - width), end: n };
+}
+$("followBtn").addEventListener("click", () => {
+  follow = true;
+  maintainFollow();      // snap current zoom width to the right edge
+  updateFollowBtn();
+  drawChart();
+});
 let hoverPos = null;  // {x, y} css px inside the canvas
 let dragging = null;  // {x0, start0, end0}
 const MIN_BARS = 15;
@@ -428,8 +446,10 @@ function drawChart() {
     }
     ctx.globalAlpha = 1;
   }
-  // signal markers from the proven strategies (1m chart only)
-  if (indOn("sig") && sigData && chartSel.tf === "1m" && !chartSel.rb) {
+  // signal markers from the proven strategies, per displayed series
+  const sigMatches = sigData && ((chartSel.rb && sigData.rb == chartSel.rb) ||
+                                 (!chartSel.rb && !sigData.rb && sigData.tf === chartSel.tf));
+  if (indOn("sig") && sigMatches) {
     const tsIdx = new Map();
     cs.forEach((c, i) => tsIdx.set(c.t, i));
     ctx.font = "600 10px system-ui, sans-serif";
@@ -548,6 +568,8 @@ chartEl.addEventListener("wheel", e => {
     if (bars) {
       let ns = Math.max(0, Math.min(start + bars, chartData().length - width));
       view = width >= chartData().length ? null : { start: ns, end: ns + width };
+      follow = !view || view.end >= chartData().length;
+      updateFollowBtn();
       drawChart();
     }
     return;
@@ -558,6 +580,8 @@ chartEl.addEventListener("wheel", e => {
   const newWidth = Math.max(MIN_BARS, Math.min(chartData().length, Math.round(width * factor)));
   let newStart = Math.round(anchor - frac * newWidth);
   view = newWidth >= chartData().length ? null : { start: newStart, end: newStart + newWidth };
+  follow = !view || view.end >= chartData().length;
+  updateFollowBtn();
   drawChart();
 }, { passive: false });
 
@@ -570,7 +594,7 @@ window.addEventListener("mouseup", () => {
   dragging = null;
   chartEl.style.cursor = "crosshair";
 });
-chartEl.addEventListener("dblclick", () => { view = null; drawChart(); });
+chartEl.addEventListener("dblclick", () => { view = null; follow = true; updateFollowBtn(); drawChart(); });
 
 chartEl.addEventListener("mousemove", e => {
   if (!snap || !chartData().length) return;
@@ -583,6 +607,8 @@ chartEl.addEventListener("mousemove", e => {
     let ns = dragging.start0 - dBars;
     ns = Math.max(0, Math.min(ns, chartData().length - width));
     view = width >= chartData().length ? null : { start: ns, end: ns + width };
+    follow = !view || view.end >= chartData().length;
+    updateFollowBtn();
     $("tooltip").style.display = "none";
     drawChart();
     return;
@@ -754,6 +780,7 @@ async function poll() {
     if (data.error) throw new Error(data.error);
     snap = data;
     $("err").style.display = "none";
+    maintainFollow();
     renderHeader(); renderBias(); renderLevels(); drawChart();
     fetchChartCandles();
     checkAlerts();
@@ -767,7 +794,8 @@ let sigData = null;
 let lastSigTs = 0;
 async function pollSignals() {
   try {
-    const r = await fetch("/api/signals" + apiQs());
+    const extra = chartSel.rb ? { rb: chartSel.rb } : { tf: chartSel.tf };
+    const r = await fetch("/api/signals" + apiQs(extra));
     const data = await r.json();
     if (data.error) return;
     sigData = data;
