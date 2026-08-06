@@ -29,9 +29,11 @@ BREAK_TOL_MULT = 2.0  # close beyond tol*this = break
 
 KIND_PRIOR = {
     "PDH": 15, "PDL": 15,
+    "Week high": 14, "Week low": 14,
     "OR high": 12, "OR low": 12,
+    "Pivot P": 11, "R1": 10, "S1": 10, "R2": 9, "S2": 9,
     "VWAP": 10,
-    "Prev close": 8,
+    "Prev close": 8, "PD mid": 8,
 }
 USER_PRIOR = 12       # user-drawn S/R is assumed deliberate
 UNTESTED_EMPIRICAL = 15  # neutral prior when the level was never touched today

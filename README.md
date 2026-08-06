@@ -90,6 +90,49 @@ STRONG BEARISH → STRONG BULLISH:
 | Prev close | trading above yesterday's close |
 | Momentum | last 10 minutes' net move exceeds ATR |
 
+## Chart
+
+TradingView-style interactions: mousewheel zooms around the cursor, drag
+pans, double-click resets. The crosshair shows a dynamic date-time badge on
+the time axis and a price badge on the price axis. Timeframe toggle: 1m /
+5m / 15m / 1h / 1D plus range bars (R2 / R5 / R10 points, built from 1m
+data). Levels are colored — red above price (resistance), green below
+(support); thick dashes are your levels, thin are auto. The 🔔 toggle
+enables audio alerts: two-tone beep when price reaches a shown level
+(high pitch = resistance, low = support) and a three-note chime on a bias
+flip.
+
+## Live estimate (free real-time)
+
+CME futures data is ~15 min delayed on free feeds. The header's
+"≈ live est." price is a nowcast: Yahoo serves QQQ (Nasdaq-100 ETF) in
+real time, and the server computes the NQ/QQQ ratio over the overlapping
+delayed window and applies it to QQQ's latest print. Good for context and
+alerts; never for execution.
+
+## Automated trading (Tradovate) — sim first
+
+`trader/` contains the execution scaffold: a Tradovate REST client
+(demo environment by default), per-account prop-firm risk rules
+(max contracts, daily loss halt, trailing drawdown, flatten-by time,
+automation gate), and a trade copier that fans one signal out to every
+account whose rules allow it.
+
+```bash
+cp trader/config.example.json trader/config.json   # fill in accounts/rules
+python3 -m trader.engine --paper                   # log-only, no credentials needed
+python3 -m trader.engine --sim                     # orders to Tradovate DEMO
+```
+
+Live trading additionally requires the environment variable
+`TRADOVATE_LIVE=YES_I_UNDERSTAND` — an explicit typed acknowledgment.
+
+**Prop-firm warning:** many prop firms restrict or forbid fully automated
+trading and/or cross-firm trade copying. The `allow_automation` flag per
+account defaults to false; enable it only after reading your firm's
+current policy. The risk module enforces loss limits — it cannot make
+automation allowed.
+
 ## Reversal-likelihood ranking
 
 `python3 rank_levels.py` scores every level (yours + auto) on how likely it
@@ -116,14 +159,18 @@ the next reversal can happen, so only evidence against a level removes it.
 Use `--all` (CLI) or untick the checkbox (dashboard) to see everything;
 `--min-rate 0.6` raises the bar.
 
-## Strategy Analyzer
+## Strategy Analyzer — 24 strategies
 
 Backtests today's 1-minute candles with next-bar-open fills, one contract,
-no costs. Built-ins:
-
-- `ema_cross` — EMA 9/21 crossover, always-in flip
-- `orb` — 15-minute opening-range breakout, 1.5× ATR stop / 3× ATR target
-- `vwap_fade` — fade 2× ATR stretches from VWAP back to VWAP
+no costs, across 24 named classic setups: EMA cross, opening-range
+breakout, VWAP fade/reclaim, EMA pullback, level bounce, Connors RSI-2,
+RSI-50 cross, Bollinger reversion + breakout, Keltner fade, MACD cross,
+Donchian (turtle) breakout, inside-bar breakout, engulfing reversal,
+three-bar pullback, gap fade, gap-and-go, initial-balance breakout,
+midday VWAP reversion, momentum thrust, ATR trend ride, opening drive,
+floor-pivot bounce, and swing-failure. All share one execution engine so
+results are comparable; the >51% filter surfaces the ones earning trust
+today. Add a strategy in ~5 lines in `nq/strategies.py`.
 
 PnL is reported in points and dollars for both NQ ($20/pt) and MNQ ($2/pt).
 Add a strategy by writing a function in `nq/backtest.py` and registering it

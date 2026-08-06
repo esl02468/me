@@ -1,0 +1,40 @@
+{
+  "symbol": "MNQZ5",
+  "strategy": "pivot_bounce",
+  "qty": 1,
+  "poll_seconds": 20,
+  "tradovate": {
+    "username": "YOUR_TRADOVATE_USERNAME",
+    "password": "SET_VIA_ENV_OR_HERE",
+    "cid": "YOUR_API_CID",
+    "secret": "YOUR_API_SECRET",
+    "app_id": "nq-toolkit",
+    "live": false
+  },
+  "accounts": [
+    {
+      "name": "practice-main",
+      "account_id": 0,
+      "rules": {
+        "max_contracts": 2,
+        "daily_loss_limit": 800,
+        "trailing_drawdown": 2000,
+        "flatten_by": "15:55",
+        "max_trades_per_day": 10,
+        "allow_automation": true
+      }
+    },
+    {
+      "name": "prop-eval-COPY-EXAMPLE",
+      "account_id": 0,
+      "rules": {
+        "max_contracts": 1,
+        "daily_loss_limit": 500,
+        "trailing_drawdown": 1500,
+        "flatten_by": "15:50",
+        "max_trades_per_day": 6,
+        "allow_automation": false
+      }
+    }
+  ]
+}

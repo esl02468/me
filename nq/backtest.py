@@ -212,12 +212,197 @@ def backtest_vwap_fade(
     return report
 
 
+def backtest_level_bounce(
+    candles: list[Candle], levels: list[float] | None = None,
+    target_atr: float = 0.7, stop_atr: float = 1.4, max_hold: int = 30,
+) -> Report:
+    """Trade the first touch of each level, betting on a bounce.
+
+    Engineered for hit rate rather than home runs: the target (0.7 ATR) is
+    half the stop (1.4 ATR), so geometry alone favors the target being hit
+    first; a momentum veto skips touches hit at full speed; one attempt per
+    level per side per day. High win rate + small wins is the profile —
+    profitability still depends on the levels being real.
+    """
+    report = Report(strategy=f"level_bounce({target_atr}x/{stop_atr}x ATR)")
+    if not levels or len(candles) < 30:
+        return report
+    prices = sorted({round(float(p), 2) for p in levels})
+    traded: set[tuple[float, str]] = set()
+    position: Trade | None = None
+    stop = target = 0.0
+    entry_i = 0
+    for i in range(20, len(candles) - 1):
+        c = candles[i]
+        nxt = candles[i + 1]
+        a = atr(candles[: i + 1]) or 1.0
+        tol = max(0.3 * a, 1.0)
+        if position is None:
+            mom = c.close - candles[i - 5].close
+            for lv in prices:
+                came_from_above = candles[i - 1].close > lv
+                if (came_from_above and c.low <= lv + tol and c.close > lv - tol
+                        and (lv, "long") not in traded and mom > -2 * a):
+                    traded.add((lv, "long"))
+                    position = Trade(side="long", entry_ts=nxt.ts, entry=nxt.open)
+                    stop, target = position.entry - stop_atr * a, position.entry + target_atr * a
+                elif (not came_from_above and c.high >= lv - tol and c.close < lv + tol
+                        and (lv, "short") not in traded and mom < 2 * a):
+                    traded.add((lv, "short"))
+                    position = Trade(side="short", entry_ts=nxt.ts, entry=nxt.open)
+                    stop, target = position.entry + stop_atr * a, position.entry - target_atr * a
+                if position:
+                    entry_i = i + 1
+                    report.trades.append(position)
+                    break
+        else:
+            if position.side == "long":
+                if c.low <= stop:
+                    _close_trade(position, c, stop, "stop")
+                    position = None
+                elif c.high >= target:
+                    _close_trade(position, c, target, "target")
+                    position = None
+            else:
+                if c.high >= stop:
+                    _close_trade(position, c, stop, "stop")
+                    position = None
+                elif c.low <= target:
+                    _close_trade(position, c, target, "target")
+                    position = None
+            if position and i - entry_i >= max_hold:
+                _close_trade(position, c, c.close, "time")
+                position = None
+    if position and position.exit is None:
+        last = candles[-1]
+        _close_trade(position, last, last.close, "eod")
+    return report
+
+
+def backtest_ema_pullback(
+    candles: list[Candle], target_atr: float = 1.5, stop_atr: float = 1.0,
+) -> Report:
+    """Trend-following: in an EMA9>EMA21 uptrend, buy the pullback that tags
+    EMA21 and holds; mirror for downtrends. With-trend entries, asymmetric
+    target (bigger than stop) — lower hit rate, larger winners."""
+    report = Report(strategy=f"ema_pullback({target_atr}x/{stop_atr}x ATR)")
+    closes = [c.close for c in candles]
+    if len(closes) < 40:
+        return report
+    e9, e21 = ema(closes, 9), ema(closes, 21)
+    position: Trade | None = None
+    stop = target = 0.0
+    for i in range(25, len(candles) - 1):
+        c = candles[i]
+        nxt = candles[i + 1]
+        a = atr(candles[: i + 1]) or 1.0
+        if position is None:
+            up = e9[i] > e21[i] and e9[i - 3] > e21[i - 3]
+            dn = e9[i] < e21[i] and e9[i - 3] < e21[i - 3]
+            if up and c.low <= e21[i] and c.close > e21[i]:
+                position = Trade(side="long", entry_ts=nxt.ts, entry=nxt.open)
+                stop, target = position.entry - stop_atr * a, position.entry + target_atr * a
+                report.trades.append(position)
+            elif dn and c.high >= e21[i] and c.close < e21[i]:
+                position = Trade(side="short", entry_ts=nxt.ts, entry=nxt.open)
+                stop, target = position.entry + stop_atr * a, position.entry - target_atr * a
+                report.trades.append(position)
+        else:
+            if position.side == "long":
+                if c.low <= stop:
+                    _close_trade(position, c, stop, "stop")
+                    position = None
+                elif c.high >= target:
+                    _close_trade(position, c, target, "target")
+                    position = None
+            else:
+                if c.high >= stop:
+                    _close_trade(position, c, stop, "stop")
+                    position = None
+                elif c.low <= target:
+                    _close_trade(position, c, target, "target")
+                    position = None
+    if position and position.exit is None:
+        last = candles[-1]
+        _close_trade(position, last, last.close, "eod")
+    return report
+
+
+def backtest_vwap_reclaim(
+    candles: list[Candle], confirm_atr: float = 0.5,
+    target_atr: float = 1.2, stop_atr: float = 1.0,
+) -> Report:
+    """Momentum: when price crosses VWAP and closes beyond it by a margin,
+    trade the continuation in the crossing direction."""
+    report = Report(strategy=f"vwap_reclaim({confirm_atr}x confirm)")
+    if len(candles) < 40:
+        return report
+    vw = vwap(candles)
+    position: Trade | None = None
+    stop = target = 0.0
+    for i in range(25, len(candles) - 1):
+        c = candles[i]
+        prev = candles[i - 1]
+        nxt = candles[i + 1]
+        a = atr(candles[: i + 1]) or 1.0
+        if position is None:
+            crossed_up = prev.close < vw[i - 1] and c.close > vw[i] + confirm_atr * a
+            crossed_dn = prev.close > vw[i - 1] and c.close < vw[i] - confirm_atr * a
+            if crossed_up:
+                position = Trade(side="long", entry_ts=nxt.ts, entry=nxt.open)
+                stop, target = position.entry - stop_atr * a, position.entry + target_atr * a
+                report.trades.append(position)
+            elif crossed_dn:
+                position = Trade(side="short", entry_ts=nxt.ts, entry=nxt.open)
+                stop, target = position.entry + stop_atr * a, position.entry - target_atr * a
+                report.trades.append(position)
+        else:
+            if position.side == "long":
+                if c.low <= stop:
+                    _close_trade(position, c, stop, "stop")
+                    position = None
+                elif c.high >= target:
+                    _close_trade(position, c, target, "target")
+                    position = None
+            else:
+                if c.high >= stop:
+                    _close_trade(position, c, stop, "stop")
+                    position = None
+                elif c.low <= target:
+                    _close_trade(position, c, target, "target")
+                    position = None
+    if position and position.exit is None:
+        last = candles[-1]
+        _close_trade(position, last, last.close, "eod")
+    return report
+
+
 STRATEGIES = {
     "ema_cross": backtest_ema_cross,
     "orb": backtest_orb,
     "vwap_fade": backtest_vwap_fade,
+    "ema_pullback": backtest_ema_pullback,
+    "vwap_reclaim": backtest_vwap_reclaim,
 }
 
 
+def session_level_prices(session: Session) -> list[float]:
+    """Auto levels + the user's levels.json, as plain prices."""
+    from .levels import compute_auto_levels, load_levels
+
+    prices = [d["price"] for d in compute_auto_levels(session)]
+    prices += [l.price for l in load_levels()]
+    return prices
+
+
 def run_all(session: Session) -> list[Report]:
-    return [fn(session.candles) for fn in STRATEGIES.values()]
+    from .strategies import extended_strategies
+
+    reports = [fn(session.candles) for fn in STRATEGIES.values()]
+    levels = session_level_prices(session)
+    reports.append(backtest_level_bounce(session.candles, levels))
+    pivots = levels[:9] if levels else []  # PDH/PDL/close/mid + floor pivots
+    reports.extend(extended_strategies(session.candles, session.prev_close, pivots))
+    # Most trades first among equals; the >51% filter does the real ranking.
+    reports.sort(key=lambda r: (r.win_rate, len(r.closed)), reverse=True)
+    return reports
