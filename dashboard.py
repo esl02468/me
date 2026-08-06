@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 import time
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from nq.backtest import run_all
 from nq.bias import OPENING_RANGE_BARS, compute_bias, vwap
@@ -37,6 +39,7 @@ INDEX = ROOT / "index.html"
 CACHE_TTL = 10.0  # seconds between upstream fetches
 
 _demo = False
+_token = ""  # non-empty -> every request must carry it (?token= or X-NQ-Token)
 _cache_lock = threading.Lock()
 _cache: dict[str, tuple[float, object]] = {}
 
@@ -134,15 +137,26 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code: int = 200) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json")
 
+    def _authorized(self) -> bool:
+        if not _token:
+            return True
+        qs = parse_qs(urlparse(self.path).query)
+        supplied = qs.get("token", [""])[0] or self.headers.get("X-NQ-Token", "")
+        return supplied == _token
+
     def do_GET(self) -> None:  # noqa: N802
+        route = urlparse(self.path).path
+        if not self._authorized():
+            self._json({"error": "unauthorized — append ?token=<your token>"}, 401)
+            return
         try:
-            if self.path in ("/", "/index.html"):
+            if route in ("/", "/index.html"):
                 self._send(200, INDEX.read_bytes(), "text/html; charset=utf-8")
-            elif self.path == "/api/snapshot":
+            elif route == "/api/snapshot":
                 self._json(_cached("snapshot", CACHE_TTL, build_snapshot))
-            elif self.path == "/api/backtest":
+            elif route == "/api/backtest":
                 self._json(_cached("backtest", 30.0, build_backtest))
-            elif self.path == "/api/levels":
+            elif route == "/api/levels":
                 self._json({"levels": [asdict(l) for l in load_levels()]})
             else:
                 self._json({"error": "not found"}, 404)
@@ -152,7 +166,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/api/levels":
+        if not self._authorized():
+            self._json({"error": "unauthorized — append ?token=<your token>"}, 401)
+            return
+        if urlparse(self.path).path != "/api/levels":
             self._json({"error": "not found"}, 404)
             return
         try:
@@ -172,16 +189,25 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global _demo
+    global _demo, _token
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8787)
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="bind address; 0.0.0.0 for remote access (set --token!)")
+    ap.add_argument("--token", default=os.environ.get("NQ_TOKEN", ""),
+                    help="require this token on every request (?token= or X-NQ-Token)")
     ap.add_argument("--demo", action="store_true", help="synthetic data, no network")
     args = ap.parse_args()
     _demo = args.demo
+    _token = args.token
+    if args.host not in ("127.0.0.1", "localhost") and not _token:
+        print("WARNING: binding to a public interface without --token — "
+              "anyone who finds the port can view the dashboard.")
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
     mode = "DEMO (synthetic)" if _demo else "LIVE (yahoo → stooq fallback)"
-    print(f"NQ dashboard on http://localhost:{args.port}  [{mode}]")
+    tok = f"/?token={_token}" if _token else "/"
+    print(f"NQ dashboard on http://{args.host}:{args.port}{tok}  [{mode}]")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

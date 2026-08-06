@@ -23,6 +23,27 @@ python3 dashboard.py                 # → http://localhost:8787
 No network where you're running it? Every command accepts `--demo`
 (or `NQ_DEMO=1`) to run on a realistic synthetic session.
 
+## Run it on a Windows VPS (24/7, live, no login wall)
+
+One elevated PowerShell on the VPS:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+irm https://raw.githubusercontent.com/esl02468/me/main/deploy/windows-setup.ps1 -OutFile setup.ps1
+.\setup.ps1
+```
+
+It clones the repo to `C:\nq-toolkit`, generates a private access token,
+registers a scheduled task that starts the dashboard at boot and restarts
+it if it dies, opens the firewall port, and prints the URL —
+`http://<vps-ip>:8787/?token=<token>` — which works from any computer or
+phone. The token is the password: keep the URL private. Re-run the script
+any time to update the code (URL stays the same).
+
+`dashboard.py` flags behind this: `--host 0.0.0.0` binds publicly,
+`--token <secret>` requires the token on every request (also honored as an
+`X-NQ-Token` header or `NQ_TOKEN` env var).
+
 ## View it anywhere (Vercel)
 
 The repo deploys to Vercel as-is: `index.html` is served at the root and

@@ -436,8 +436,16 @@ function renderBacktest(bt) {
 }
 
 /* ---------- polling ---------- */
-// Add ?demo=1 to the page URL to force the synthetic session end-to-end.
-const API_QS = new URLSearchParams(location.search).get("demo") ? "?demo=1" : "";
+// ?demo=1 forces the synthetic session; ?token= is the VPS access token —
+// both carry through from the page URL to every API call.
+const API_QS = (() => {
+  const page = new URLSearchParams(location.search);
+  const api = new URLSearchParams();
+  if (page.get("demo")) api.set("demo", "1");
+  if (page.get("token")) api.set("token", page.get("token"));
+  const s = api.toString();
+  return s ? "?" + s : "";
+})();
 async function poll() {
   try {
     const r = await fetch("/api/snapshot" + API_QS);
