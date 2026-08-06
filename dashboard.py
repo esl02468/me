@@ -54,7 +54,14 @@ def _cached(key: str, ttl: float, builder):
         hit = _cache.get(key)
         if hit and now - hit[0] < ttl:
             return hit[1]
-    value = builder()
+    try:
+        value = builder()
+    except Exception:
+        if hit:  # upstream hiccup — stale data beats a dead page
+            if isinstance(hit[1], dict):
+                return {**hit[1], "stale": True}
+            return hit[1]
+        raise
     with _cache_lock:
         _cache[key] = (time.monotonic(), value)
     return value
@@ -239,31 +246,33 @@ class Handler(BaseHTTPRequestHandler):
         try:
             qs = parse_qs(urlparse(self.path).query)
             symbol = qs.get("symbol", ["NQ=F"])[0][:24]
+            demo_q = True if qs.get("demo", ["0"])[0] in ("1", "true") else None
+            dkey = "d" if demo_q else "l"
             if route in ("/", "/index.html"):
                 self._send(200, INDEX.read_bytes(), "text/html; charset=utf-8")
             elif route == "/api/snapshot":
-                self._json(_cached(f"snapshot:{symbol}", CACHE_TTL,
-                                   lambda: build_snapshot(symbol=symbol)))
+                self._json(_cached(f"snapshot:{symbol}:{dkey}", CACHE_TTL,
+                                   lambda: build_snapshot(demo=demo_q, symbol=symbol)))
             elif route == "/api/backtest":
-                self._json(_cached(f"backtest:{symbol}", 30.0,
-                                   lambda: build_backtest(symbol=symbol)))
+                self._json(_cached(f"backtest:{symbol}:{dkey}", 30.0,
+                                   lambda: build_backtest(demo=demo_q, symbol=symbol)))
             elif route == "/api/signals":
                 tf = qs.get("tf", ["1m"])[0]
                 rb = qs.get("rb", [None])[0]
                 rb_val = float(rb) if rb else None
-                self._json(_cached(f"signals:{symbol}:{tf}:{rb_val}", 30.0,
-                                   lambda: build_signals(symbol=symbol, tf=tf, rb=rb_val)))
+                self._json(_cached(f"signals:{symbol}:{tf}:{rb_val}:{dkey}", 30.0,
+                                   lambda: build_signals(demo=demo_q, symbol=symbol, tf=tf, rb=rb_val)))
             elif route == "/api/candles":
                 tf = qs.get("tf", ["1m"])[0]
                 rb = qs.get("rb", [None])[0]
                 rb_val = float(rb) if rb else None
-                key = f"candles:{symbol}:{tf}:{rb_val}"
+                key = f"candles:{symbol}:{tf}:{rb_val}:{dkey}"
                 self._json(_cached(key, CACHE_TTL, lambda: {
                     "tf": tf, "rb": rb_val,
                     "candles": [
                         {"t": c.ts, "o": c.open, "h": c.high, "l": c.low, "c": c.close, "v": c.volume}
                         for c in get_chart_candles(tf, rb_val, symbol=symbol,
-                                                   demo=True if _demo else None)
+                                                   demo=demo_q if demo_q else (True if _demo else None))
                     ],
                 }))
             elif route == "/api/journal":

@@ -20,8 +20,9 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
+YAHOO_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
 YAHOO_URL = (
-    "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    "https://{host}/v8/finance/chart/{symbol}"
     "?interval={interval}&range={range}&includePrePost=true"
 )
 STOOQ_URL = "https://stooq.com/q/l/?s={symbol}&f=sd2t2ohlcv&h&e=csv"
@@ -84,8 +85,17 @@ def _parse_yahoo(payload: dict) -> tuple[list[Candle], dict]:
 def fetch_yahoo_session(
     symbol: str = DEFAULT_SYMBOL, interval: str = "1m", day_range: str = "1d"
 ) -> Session:
-    url = YAHOO_URL.format(symbol=urllib.parse.quote(symbol), interval=interval, range=day_range)
-    payload = json.loads(_http_get(url))
+    last_err: Exception | None = None
+    for host in YAHOO_HOSTS:
+        url = YAHOO_URL.format(host=host, symbol=urllib.parse.quote(symbol),
+                               interval=interval, range=day_range)
+        try:
+            payload = json.loads(_http_get(url))
+            break
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            last_err = e
+    else:
+        raise last_err  # every host failed
     candles, meta = _parse_yahoo(payload)
     sess = Session(symbol=symbol, candles=candles, source="yahoo")
     sess.prev_close = meta.get("chartPreviousClose") or meta.get("previousClose")
@@ -94,9 +104,7 @@ def fetch_yahoo_session(
 
 def fetch_yahoo_daily_context(symbol: str = DEFAULT_SYMBOL) -> dict:
     """Prior-day OHLC and rolling 5-day (weekly) range from the daily series."""
-    url = YAHOO_URL.format(symbol=urllib.parse.quote(symbol), interval="1d", range="5d")
-    payload = json.loads(_http_get(url))
-    candles, _ = _parse_yahoo(payload)
+    candles = fetch_yahoo_session(symbol, interval="1d", day_range="5d").candles
     out: dict = {}
     if len(candles) >= 2:
         prev = candles[-2]
