@@ -260,8 +260,8 @@ async function fetchChartCandles() {
     if (!data.error) { chartSel.candles = data.candles; maintainFollow(); drawChart(); }
   } catch (e) { /* transient */ }
 }
-document.querySelectorAll(".tfbtn").forEach(b => b.addEventListener("click", () => {
-  document.querySelectorAll(".tfbtn").forEach(x => x.classList.remove("active"));
+document.querySelectorAll(".tfbtn[data-tf], .tfbtn[data-rb]").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".tfbtn[data-tf], .tfbtn[data-rb]").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
   chartSel = { tf: b.dataset.tf || "1m", rb: b.dataset.rb ? +b.dataset.rb : null, candles: null };
   view = null;
@@ -275,8 +275,9 @@ function updateFollowBtn() { $("followBtn").classList.toggle("active", follow); 
 function maintainFollow() {
   if (!follow || !view) return;
   const n = chartData().length;
-  const width = view.end - view.start;
-  view = width >= n ? null : { start: Math.max(0, n - width), end: n };
+  const width = Math.min(view.end - view.start, n);
+  // Keep the exact zoom width; only move the window to the live edge.
+  view = { start: Math.max(0, n - width), end: n };
 }
 $("followBtn").addEventListener("click", () => {
   follow = true;
@@ -804,8 +805,8 @@ async function pollSignals() {
       const names = (data.strategies || [])
         .map(st => `${st.name} (${st.win_rate}% win, ${st.trades} trades)`) .join(" · ");
       el.textContent = data.markers && data.markers.length
-        ? `Signals from ${data.unproven_fallback ? "best-available (unproven today)" : "proven >51%"} strategies: ${names}`
-        : "No strategy signals yet today.";
+        ? `Actionable reversal signals (proven >51% win + profitable on this frame today): ${names}`
+        : "No reversal strategy has earned signal rights on this frame today (needs >51% win, PF>1, ≥5 trades).";
     }
     const newest = (data.markers || []).reduce((a, m) => Math.max(a, m.ts), 0);
     if (lastSigTs && newest > lastSigTs) beep([523, 784], 0.12);  // fresh signal

@@ -104,10 +104,13 @@ ETF proxy (NQ→QQQ, ES→SPY, YM→DIA, RTY→IWM, GC→GLD, CL→USO...).
 
 Signals run on **whatever series the chart shows** — every timeframe (1m
 through 1D) and every range-bar frame — with bar-based strategy parameters
-adapting to the bar size, TradingView-indicator style. The Signals chip
-draws entry/exit markers from the strategies proven >51% win rate with ≥3
-closed trades **on that series today** (falling back to the two best
-available, labeled unproven, when none qualify): ▲ long entries, ▼ short
+adapting to the bar size, TradingView-indicator style. Only **actionable
+trend-reversal** signals draw: the strategy must be reversal-family
+(pivot/level bounce, VWAP/Bollinger/Keltner reversion, RSI-2, swing
+failure, gap fade, engulfing), and proven on that series **today** with
+win rate > 51% AND profit factor > 1 AND ≥ 5 closed trades. At most the
+15 most recent markers show. When nothing qualifies, the chart honestly
+shows no signals rather than unproven ones: ▲ long entries, ▼ short
 entries, dashed connectors to × exits colored by result, ○ still-open
 trades. A summary line names the qualifying strategies with their live win
 rates, and a fresh signal triggers an audio chime when alerts are on.
