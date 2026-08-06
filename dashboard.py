@@ -58,6 +58,16 @@ def _cached(key: str, ttl: float, builder):
 
 _auto_levels = compute_auto_levels
 
+# Strategies whose signals ARE trend-reversal calls (mean reversion at a
+# level/band). Trend-following entries are deliberately excluded from the
+# chart's signal layer — the analyzer table still shows all 24.
+REVERSAL_STRATEGIES = {
+    "pivot_bounce", "level_bounce", "midday_vwap_revert", "keltner_fade",
+    "boll_revert", "rsi2_revert", "swing_failure", "engulfing_reversal",
+    "vwap_fade", "gap_fade",
+}
+MAX_MARKERS = 15
+
 
 def build_snapshot(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
     if demo is None:
@@ -133,12 +143,16 @@ def build_signals(
     if rb or tf != "1m":
         sess = replace(sess, candles=get_chart_candles(tf, rb, symbol=symbol, demo=demo))
     reports = run_all(sess)
-    qualified = [r for r in reports if r.win_rate > 0.51 and len(r.closed) >= 3]
-    fallback = not qualified
-    if fallback:
-        qualified = sorted(
-            (r for r in reports if len(r.closed) >= 3),
-            key=lambda r: r.win_rate, reverse=True)[:2]
+    # Actionable = reversal-family strategy proven on THIS series today:
+    # win rate > 51% AND net profitable (PF > 1) AND enough trades to mean it.
+    qualified = [
+        r for r in reports
+        if r.strategy.split("(")[0] in REVERSAL_STRATEGIES
+        and r.win_rate > 0.51
+        and r.profit_factor > 1.0
+        and len(r.closed) >= 5
+    ]
+    fallback = False
     markers = []
     for r in qualified:
         name = r.strategy.split("(")[0]
@@ -154,6 +168,7 @@ def build_signals(
                 "open": t.exit is None,
             })
     markers.sort(key=lambda m: m["ts"])
+    markers = markers[-MAX_MARKERS:]  # only the recent, actionable ones
     return {
         "tf": tf,
         "rb": rb,
