@@ -16,8 +16,10 @@ class handler(BaseHTTPRequestHandler):
         qs = parse_qs(urlparse(self.path).query)
         demo = qs.get("demo", ["0"])[0] in ("1", "true")
         symbol = qs.get("symbol", ["NQ=F"])[0][:24]
+        tf = qs.get("tf", ["1m"])[0]
+        rb = qs.get("rb", [None])[0]
         try:
-            body = json.dumps(build_signals(demo=True if demo else None, symbol=symbol)).encode()
+            body = json.dumps(build_signals(demo=True if demo else None, symbol=symbol, tf=tf, rb=float(rb) if rb else None)).encode()
             code = 200
         except Exception as e:
             body = json.dumps({"error": f"{type(e).__name__}: {e}"}).encode()
