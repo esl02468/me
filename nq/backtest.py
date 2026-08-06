@@ -391,7 +391,7 @@ def session_level_prices(session: Session) -> list[float]:
     from .levels import compute_auto_levels, load_levels
 
     prices = [d["price"] for d in compute_auto_levels(session)]
-    prices += [l.price for l in load_levels()]
+    prices += [l.price for l in load_levels(session.symbol)]
     return prices
 
 

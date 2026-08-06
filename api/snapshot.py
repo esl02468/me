@@ -15,8 +15,9 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         qs = parse_qs(urlparse(self.path).query)
         demo = qs.get("demo", ["0"])[0] in ("1", "true")
+        symbol = qs.get("symbol", ["NQ=F"])[0][:24]
         try:
-            body = json.dumps(build_snapshot(demo=True if demo else None)).encode()
+            body = json.dumps(build_snapshot(demo=True if demo else None, symbol=symbol)).encode()
             code = 200
         except Exception as e:
             body = json.dumps({"error": f"{type(e).__name__}: {e}"}).encode()

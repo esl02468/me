@@ -59,10 +59,10 @@ def _cached(key: str, ttl: float, builder):
 _auto_levels = compute_auto_levels
 
 
-def build_snapshot(demo: bool | None = None) -> dict:
+def build_snapshot(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
     if demo is None:
         demo = True if _demo else None
-    sess: Session = get_session(demo=demo)
+    sess: Session = get_session(symbol=symbol, demo=demo)
     bias = compute_bias(sess)
     if sess.source == "yahoo":
         est = nowcast_from_qqq(sess)
@@ -71,7 +71,7 @@ def build_snapshot(demo: bool | None = None) -> dict:
     else:
         est = None
     auto = _auto_levels(sess)
-    user = [asdict(l) for l in load_levels()]
+    user = [asdict(l) for l in load_levels(sess.symbol)]
     reversal = [
         {
             "price": r.price, "label": r.label, "user": r.user, "rank": r.rank,
@@ -104,16 +104,57 @@ def build_snapshot(demo: bool | None = None) -> dict:
     }
 
 
-def build_backtest(demo: bool | None = None) -> dict:
+def build_backtest(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
     if demo is None:
         demo = True if _demo else None
-    sess: Session = get_session(demo=demo)
+    sess: Session = get_session(symbol=symbol, demo=demo)
     reports = run_all(sess)
     return {
         "symbol": sess.symbol,
         "source": sess.source,
         "candles": len(sess.candles),
         "reports": [r.summary() for r in reports],
+    }
+
+
+def build_signals(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
+    """Entry/exit markers from strategies earning trust today: everything
+    with win rate > 51% and >= 3 closed trades; if none qualify, the top 2
+    by win rate with >= 3 trades, flagged unproven."""
+    if demo is None:
+        demo = True if _demo else None
+    sess: Session = get_session(symbol=symbol, demo=demo)
+    reports = run_all(sess)
+    qualified = [r for r in reports if r.win_rate > 0.51 and len(r.closed) >= 3]
+    fallback = not qualified
+    if fallback:
+        qualified = sorted(
+            (r for r in reports if len(r.closed) >= 3),
+            key=lambda r: r.win_rate, reverse=True)[:2]
+    markers = []
+    for r in qualified:
+        name = r.strategy.split("(")[0]
+        for t in r.trades:
+            markers.append({
+                "strategy": name,
+                "side": t.side,
+                "ts": t.entry_ts,
+                "price": t.entry,
+                "exit_ts": t.exit_ts,
+                "exit": t.exit,
+                "points": round(t.points, 2) if t.exit is not None else None,
+                "open": t.exit is None,
+            })
+    markers.sort(key=lambda m: m["ts"])
+    return {
+        "symbol": sess.symbol,
+        "strategies": [
+            {"name": r.strategy.split("(")[0], "win_rate": round(r.win_rate * 100, 1),
+             "trades": len(r.closed), "points": round(r.total_points, 2)}
+            for r in qualified
+        ],
+        "unproven_fallback": fallback,
+        "markers": markers,
     }
 
 
@@ -142,27 +183,34 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "unauthorized — append ?token=<your token>"}, 401)
             return
         try:
+            qs = parse_qs(urlparse(self.path).query)
+            symbol = qs.get("symbol", ["NQ=F"])[0][:24]
             if route in ("/", "/index.html"):
                 self._send(200, INDEX.read_bytes(), "text/html; charset=utf-8")
             elif route == "/api/snapshot":
-                self._json(_cached("snapshot", CACHE_TTL, build_snapshot))
+                self._json(_cached(f"snapshot:{symbol}", CACHE_TTL,
+                                   lambda: build_snapshot(symbol=symbol)))
             elif route == "/api/backtest":
-                self._json(_cached("backtest", 30.0, build_backtest))
+                self._json(_cached(f"backtest:{symbol}", 30.0,
+                                   lambda: build_backtest(symbol=symbol)))
+            elif route == "/api/signals":
+                self._json(_cached(f"signals:{symbol}", 30.0,
+                                   lambda: build_signals(symbol=symbol)))
             elif route == "/api/candles":
-                qs = parse_qs(urlparse(self.path).query)
                 tf = qs.get("tf", ["1m"])[0]
                 rb = qs.get("rb", [None])[0]
                 rb_val = float(rb) if rb else None
-                key = f"candles:{tf}:{rb_val}"
+                key = f"candles:{symbol}:{tf}:{rb_val}"
                 self._json(_cached(key, CACHE_TTL, lambda: {
                     "tf": tf, "rb": rb_val,
                     "candles": [
                         {"t": c.ts, "o": c.open, "h": c.high, "l": c.low, "c": c.close, "v": c.volume}
-                        for c in get_chart_candles(tf, rb_val, demo=True if _demo else None)
+                        for c in get_chart_candles(tf, rb_val, symbol=symbol,
+                                                   demo=True if _demo else None)
                     ],
                 }))
             elif route == "/api/levels":
-                self._json({"levels": [asdict(l) for l in load_levels()]})
+                self._json({"levels": [asdict(l) for l in load_levels(symbol)]})
             else:
                 self._json({"error": "not found"}, 404)
         except RuntimeError as e:
@@ -184,7 +232,8 @@ class Handler(BaseHTTPRequestHandler):
                 Level(price=float(i["price"]), label=str(i.get("label", "")), kind=str(i.get("kind", "pivot")))
                 for i in raw.get("levels", [])
             ]
-            save_levels(levels)
+            symbol = parse_qs(urlparse(self.path).query).get("symbol", ["NQ=F"])[0][:24]
+            save_levels(levels, symbol)
             self._json({"ok": True, "count": len(levels)})
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
             self._json({"error": f"bad levels payload: {e}"}, 400)

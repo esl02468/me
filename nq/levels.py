@@ -29,13 +29,12 @@ class Level:
     kind: str = "pivot"
 
 
-def load_levels(path: str = DEFAULT_PATH) -> list[Level]:
-    if not os.path.exists(path):
-        return []
-    with open(path) as f:
-        raw = json.load(f)
+DEFAULT_SYMBOL = "NQ=F"
+
+
+def _parse_items(items) -> list[Level]:
     out = []
-    for item in raw.get("levels", []):
+    for item in items or []:
         try:
             out.append(
                 Level(
@@ -49,9 +48,38 @@ def load_levels(path: str = DEFAULT_PATH) -> list[Level]:
     return sorted(out, key=lambda l: l.price, reverse=True)
 
 
-def save_levels(levels: list[Level], path: str = DEFAULT_PATH) -> None:
+def load_levels(symbol: str = DEFAULT_SYMBOL, path: str = DEFAULT_PATH) -> list[Level]:
+    """Levels for one symbol. File format is {"symbols": {sym: [...]}};
+    a legacy flat {"levels": [...]} is treated as the default symbol's."""
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        raw = json.load(f)
+    if "symbols" in raw:
+        return _parse_items(raw["symbols"].get(symbol))
+    if symbol == DEFAULT_SYMBOL:
+        return _parse_items(raw.get("levels"))
+    return []
+
+
+def save_levels(
+    levels: list[Level], symbol: str = DEFAULT_SYMBOL, path: str = DEFAULT_PATH
+) -> None:
+    """Replace one symbol's levels, preserving other symbols' entries."""
+    data: dict = {"symbols": {}}
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                raw = json.load(f)
+            if "symbols" in raw:
+                data["symbols"] = raw["symbols"]
+            elif raw.get("levels"):
+                data["symbols"][DEFAULT_SYMBOL] = raw["levels"]
+        except (json.JSONDecodeError, OSError):
+            pass
+    data["symbols"][symbol] = [asdict(l) for l in levels]
     with open(path, "w") as f:
-        json.dump({"levels": [asdict(l) for l in levels]}, f, indent=2)
+        json.dump(data, f, indent=2)
         f.write("\n")
 
 
