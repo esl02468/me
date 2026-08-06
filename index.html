@@ -20,8 +20,10 @@
     --vwap: #2a78d6;      /* series 1 blue */
     --ema-fast: #eb6834;  /* series 2 orange */
     --ema-slow: #1baf7a;  /* series 3 aqua */
-    --level-user: #52514e;  /* secondary ink — dash + label carry identity */
+    --level-user: #52514e;
     --level-auto: #898781;
+    --lv0: #2a78d6; --lv1: #eb6834; --lv2: #1baf7a; --lv3: #eda100;
+    --lv4: #e87ba4; --lv5: #008300; --lv6: #4a3aa7; --lv7: #e34948;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -41,6 +43,8 @@
       --ema-slow: #199e70;
       --level-user: #c3c2b7;
       --level-auto: #898781;
+      --lv0: #3987e5; --lv1: #d95926; --lv2: #199e70; --lv3: #c98500;
+      --lv4: #d55181; --lv5: #0ca30c; --lv6: #9085e9; --lv7: #e66767;
     }
   }
   * { box-sizing: border-box; margin: 0; }
@@ -125,7 +129,8 @@
 <body>
 <div class="grid">
   <header class="card full">
-    <h1 id="symbol">NQ=F</h1>
+    <select id="sympick" class="tfbtn" style="font-size:13px; padding:4px 8px"></select>
+    <h1 id="symbol"></h1>
     <div id="price">—</div>
     <div id="chg"></div>
     <div id="est" style="font-size:13px; color:var(--vwap); font-weight:600"></div>
@@ -143,6 +148,12 @@
       <button class="tfbtn" data-rb="2">R2</button>
       <button class="tfbtn" data-rb="5">R5</button>
       <button class="tfbtn" data-rb="10">R10</button>
+      <span style="width:1px; background:var(--grid); margin:0 4px"></span>
+      <button class="tfbtn ind active" data-ind="vwap">VWAP</button>
+      <button class="tfbtn ind active" data-ind="ema">EMA 9/21</button>
+      <button class="tfbtn ind" data-ind="bb">BB 20·2</button>
+      <button class="tfbtn ind active" data-ind="vol">Vol</button>
+      <button class="tfbtn ind active" data-ind="sig">Signals</button>
       <label style="margin-left:auto; display:flex; gap:5px; align-items:center; font:600 11.5px system-ui,sans-serif; color:var(--ink-2); cursor:pointer">
         <input type="checkbox" id="audioOn"> 🔔 audio alerts
       </label>
@@ -155,10 +166,12 @@
       <span style="--c: var(--vwap)">VWAP</span>
       <span style="--c: var(--ema-fast)">EMA 9</span>
       <span style="--c: var(--ema-slow)">EMA 21</span>
-      <span style="--c: var(--down)">Resistance (above price)</span>
-      <span style="--c: var(--up)">Support (below price)</span>
-      <span style="color:var(--muted)">thick = your levels · thin = auto</span>
+      <span style="color:var(--muted)">levels: color-matched to the table · thick = yours</span>
+      <span style="color:var(--up)">▲ long signal</span>
+      <span style="color:var(--down)">▼ short signal</span>
+      <span style="color:var(--muted)">× exit · ○ open</span>
     </div>
+    <div id="sigline" style="font-size:12px; color:var(--ink-2); margin-top:6px">Signals loading…</div>
     <div id="err"></div>
   </div>
 
@@ -240,9 +253,7 @@ function chartData() {
 async function fetchChartCandles() {
   if (chartSel.tf === "1m" && !chartSel.rb) { drawChart(); return; }
   try {
-    const q = chartSel.rb ? `rb=${chartSel.rb}` : `tf=${chartSel.tf}`;
-    const sep = API_QS ? API_QS + "&" : "?";
-    const r = await fetch("/api/candles" + sep + q);
+    const r = await fetch("/api/candles" + apiQs(chartSel.rb ? { rb: chartSel.rb } : { tf: chartSel.tf }));
     const data = await r.json();
     if (!data.error) { chartSel.candles = data.candles; drawChart(); }
   } catch (e) { /* transient */ }
@@ -292,7 +303,9 @@ function drawChart() {
   const { start, end } = viewRange();
   const all = chartData();
   const cs = all.slice(start, end);
-  const plotW = W - PADL - PADR, plotH = H - PADT - PADB;
+  const plotW = W - PADL - PADR;
+  const volH = indOn("vol") ? 64 : 0;
+  const plotH = H - PADT - PADB - volH;
   const levels = visibleReversal().map(r =>
     ({ price: r.price, label: r.label, kind: r.user ? "user" : "auto" }));
 
@@ -339,21 +352,21 @@ function drawChart() {
     ctx.fillText(label, x(i), H - PADB + 8);
   }
 
-  // level lines: red above price (resistance), green below (support);
-  // your levels are thick with long dashes, auto levels thin and faint
+  // level lines: each level keeps one identity color, matching the
+  // Chart Levels card; your levels are thick, auto levels thinner
   const px = snap.price;
   const usedLabelY = [];
   const sortedLevels = [...levels].sort((a, b) => b.price - a.price);
+  sortedLevels.forEach((lv, i) => { lv._color = levelColor(i); });
   for (const lv of sortedLevels) {
     if (lv.price <= lo || lv.price >= hi) continue;
     const user = lv.kind !== "auto";
-    const above = px != null && lv.price >= px;
-    const color = above ? css("--down") : css("--up");
+    const color = lv._color;
     const ly = y(lv.price);
-    ctx.globalAlpha = user ? 1 : 0.55;
+    ctx.globalAlpha = user ? 1 : 0.7;
     ctx.strokeStyle = color;
-    ctx.setLineDash(user ? [7, 4] : [2, 4]);
-    ctx.lineWidth = user ? 2 : 1;
+    ctx.setLineDash(user ? [7, 4] : [3, 4]);
+    ctx.lineWidth = user ? 2 : 1.25;
     ctx.beginPath(); ctx.moveTo(PADL, ly); ctx.lineTo(W - PADR, ly); ctx.stroke();
     ctx.setLineDash([]);
     let labelY = null;
@@ -383,12 +396,66 @@ function drawChart() {
     ctx.fillRect(x(i) - bw / 2, top, bw, Math.max(1, bot - top));
   }
 
-  // overlays computed on the FULL session, then sliced to the view
+  // overlays computed on the FULL series, then sliced to the view
   const closesAll = all.map(c => c.c);
-  drawLine(ctx, vwapSeries(all).slice(start, end), x, y, css("--vwap"), 2);
-  if (closesAll.length >= 21) {
+  if (indOn("bb") && closesAll.length >= 21) {
+    const { mid, up: bu, lo: bl } = bollinger(closesAll, 20, 2);
+    const su = bu.slice(start, end), sl = bl.slice(start, end);
+    ctx.beginPath();
+    su.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+    for (let i = sl.length - 1; i >= 0; i--) ctx.lineTo(x(i), y(sl[i]));
+    ctx.closePath();
+    ctx.fillStyle = css("--vwap"); ctx.globalAlpha = 0.07; ctx.fill(); ctx.globalAlpha = 1;
+    drawLine(ctx, su, x, y, css("--vwap"), 1);
+    drawLine(ctx, sl, x, y, css("--vwap"), 1);
+    drawLine(ctx, mid.slice(start, end), x, y, css("--baseline"), 1);
+  }
+  if (indOn("vwap")) drawLine(ctx, vwapSeries(all).slice(start, end), x, y, css("--vwap"), 2);
+  if (indOn("ema") && closesAll.length >= 21) {
     drawLine(ctx, ema(closesAll, 9).slice(start, end), x, y, css("--ema-fast"), 2);
     drawLine(ctx, ema(closesAll, 21).slice(start, end), x, y, css("--ema-slow"), 2);
+  }
+  // volume pane
+  if (volH) {
+    const vmax = Math.max(...cs.map(c => c.v || 0), 1);
+    const vy0 = H - PADB;
+    for (let i = 0; i < cs.length; i++) {
+      const c = cs[i];
+      const h = (c.v || 0) / vmax * (volH - 8);
+      ctx.fillStyle = c.c >= c.o ? upC : dnC;
+      ctx.globalAlpha = 0.45;
+      ctx.fillRect(x(i) - bw / 2, vy0 - h, bw, h);
+    }
+    ctx.globalAlpha = 1;
+  }
+  // signal markers from the proven strategies (1m chart only)
+  if (indOn("sig") && sigData && chartSel.tf === "1m" && !chartSel.rb) {
+    const tsIdx = new Map();
+    cs.forEach((c, i) => tsIdx.set(c.t, i));
+    ctx.font = "600 10px system-ui, sans-serif";
+    for (const m of sigData.markers || []) {
+      const i = tsIdx.get(m.ts);
+      if (i === undefined) continue;
+      const long = m.side === "long";
+      const mc = long ? upC : dnC;
+      const yb = long ? y(cs[i].l) + 14 : y(cs[i].h) - 14;
+      drawTriangle(ctx, x(i), yb, 6, long, mc);
+      if (m.exit != null && m.exit_ts != null) {
+        const j = tsIdx.get(m.exit_ts);
+        if (j !== undefined) {
+          ctx.strokeStyle = m.points >= 0 ? upC : dnC;
+          ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(x(i), y(m.price)); ctx.lineTo(x(j), y(m.exit)); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = m.points >= 0 ? upC : dnC;
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText("×", x(j), y(m.exit));
+        }
+      } else if (m.open) {
+        ctx.strokeStyle = mc; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(x(i), yb, 9, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
   }
 
   // last-price marker on right edge (only when the last bar is in view)
@@ -431,6 +498,25 @@ function drawChart() {
   }
 }
 
+function bollinger(closes, period, mult) {
+  const mid = [], up = [], lo = [];
+  for (let i = 0; i < closes.length; i++) {
+    const w = closes.slice(Math.max(0, i - period + 1), i + 1);
+    const m = w.reduce((a, b) => a + b, 0) / w.length;
+    const sd = Math.sqrt(w.reduce((a, b) => a + (b - m) ** 2, 0) / w.length);
+    mid.push(m); up.push(m + mult * sd); lo.push(m - mult * sd);
+  }
+  return { mid, up, lo };
+}
+function drawTriangle(ctx, cx, cy, r, pointUp, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  if (pointUp) { ctx.moveTo(cx, cy - r); ctx.lineTo(cx - r, cy + r); ctx.lineTo(cx + r, cy + r); }
+  else { ctx.moveTo(cx, cy + r); ctx.lineTo(cx - r, cy - r); ctx.lineTo(cx + r, cy - r); }
+  ctx.closePath(); ctx.fill();
+}
+function levelColor(i) { return css("--lv" + (i % 8)); }
+
 function drawLine(ctx, series, x, y, color, w) {
   ctx.strokeStyle = color; ctx.lineWidth = w;
   ctx.beginPath();
@@ -454,6 +540,18 @@ chartEl.addEventListener("wheel", e => {
   const plotW = rect.width - PADL - PADR;
   const { start, end } = viewRange();
   const width = end - start;
+  // Horizontal scroll (trackpad swipe or shift+wheel) pans like TradingView.
+  const panDelta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX
+                 : (e.shiftKey ? e.deltaY : 0);
+  if (panDelta) {
+    const bars = Math.round(panDelta / (plotW / width));
+    if (bars) {
+      let ns = Math.max(0, Math.min(start + bars, chartData().length - width));
+      view = width >= chartData().length ? null : { start: ns, end: ns + width };
+      drawChart();
+    }
+    return;
+  }
   const frac = Math.max(0, Math.min(1, (e.clientX - rect.left - PADL) / plotW));
   const anchor = start + frac * width;                 // candle index under cursor
   const factor = e.deltaY < 0 ? 1 / 1.15 : 1.15;       // wheel up = zoom in
@@ -543,6 +641,7 @@ function renderBias() {
 
 function renderLevels() {
   const scored = visibleReversal().slice().sort((a, b) => b.price - a.price);
+  scored.forEach((lv, i) => { lv._color = levelColor(i); });
   const hidden = (snap.reversal || []).length - scored.length;
   const px = snap.price;
   let html = "", inserted = false;
@@ -551,15 +650,15 @@ function renderLevels() {
       html += `<div class="lvl" style="color:var(--ink)"><span>▸ price</span><b>${fmt(px)}</b></div>`;
       inserted = true;
     }
-    const side = px != null && lv.price >= px ? "var(--down)" : "var(--up)";
-    const c = lv.user ? side : "var(--muted)";
+    const c = lv._color;
     const weight = lv.rating === "HIGH" ? "700" : lv.rating === "MODERATE" ? "500" : "400";
     const rate = lv.bounce_rate != null ? `${Math.round(lv.bounce_rate * 100)}% right` : "untested";
     const badge = `<span style="font-weight:${weight}; font-size:11px" title="reversal confidence #${lv.rank} ` +
       `(score ${lv.score}): ${lv.touches} touches, ${lv.bounces} bounces, ${lv.breaks} breaks">` +
       `#${lv.rank} · ${rate}</span>`;
-    html += `<div class="lvl"><span style="color:${c}">${lv.label}</span>` +
-            `${badge}<b style="color:${side}">${fmt(lv.price)}</b></div>`;
+    html += `<div class="lvl"><span style="color:${c}">` +
+            `<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${c};margin-right:6px"></span>` +
+            `${lv.label}</span>${badge}<b style="color:${c}">${fmt(lv.price)}</b></div>`;
   }
   if (!scored.length) {
     html = `<div class="lvl" style="color:var(--muted)">no levels — add yours to levels.json</div>`;
@@ -595,19 +694,62 @@ function renderBacktest(bt) {
 }
 
 /* ---------- polling ---------- */
-// ?demo=1 forces the synthetic session; ?token= is the VPS access token —
-// both carry through from the page URL to every API call.
-const API_QS = (() => {
+// ?demo=1 forces the synthetic session; ?token= is the VPS access token.
+const SYMBOLS = ["NQ=F","MNQ=F","ES=F","MES=F","YM=F","RTY=F","GC=F","SI=F","CL=F",
+                 "BTC-USD","ETH-USD","SPY","QQQ","AAPL","NVDA","TSLA"];
+let SYM = localStorage.getItem("nqSym") || "NQ=F";
+function apiQs(extra) {
   const page = new URLSearchParams(location.search);
-  const api = new URLSearchParams();
+  const api = new URLSearchParams(extra || {});
   if (page.get("demo")) api.set("demo", "1");
   if (page.get("token")) api.set("token", page.get("token"));
-  const s = api.toString();
-  return s ? "?" + s : "";
-})();
+  api.set("symbol", SYM);
+  return "?" + api.toString();
+}
+const IND = JSON.parse(localStorage.getItem("nqInd") || '{"vwap":1,"ema":1,"bb":0,"vol":1,"sig":1}');
+function indOn(k) { return !!IND[k]; }
+document.addEventListener("DOMContentLoaded", () => {
+  const pick = $("sympick");
+  for (const sym of SYMBOLS) {
+    const o = document.createElement("option");
+    o.value = o.textContent = sym;
+    pick.appendChild(o);
+  }
+  const custom = document.createElement("option");
+  custom.value = "__custom__"; custom.textContent = "custom…";
+  pick.appendChild(custom);
+  if (!SYMBOLS.includes(SYM)) {
+    const o = document.createElement("option");
+    o.value = o.textContent = SYM;
+    pick.insertBefore(o, custom);
+  }
+  pick.value = SYM;
+  pick.addEventListener("change", () => {
+    let v = pick.value;
+    if (v === "__custom__") {
+      v = (prompt("Yahoo symbol (e.g. ES=F, CL=F, BTC-USD, AAPL):") || "").trim();
+      if (!v) { pick.value = SYM; return; }
+    }
+    SYM = v.toUpperCase();
+    localStorage.setItem("nqSym", SYM);
+    snap = null; sigData = null; chartSel = { tf: chartSel.tf, rb: chartSel.rb, candles: null };
+    view = null; alerted.clear(); prevPollPrice = null; lastBiasLabel = null;
+    $("price").textContent = "—"; $("meta").textContent = "loading " + SYM + "…";
+    poll(); pollBacktest(); pollSignals();
+  });
+  document.querySelectorAll(".ind").forEach(b => {
+    b.classList.toggle("active", indOn(b.dataset.ind));
+    b.addEventListener("click", () => {
+      IND[b.dataset.ind] = indOn(b.dataset.ind) ? 0 : 1;
+      localStorage.setItem("nqInd", JSON.stringify(IND));
+      b.classList.toggle("active", indOn(b.dataset.ind));
+      drawChart();
+    });
+  });
+});
 async function poll() {
   try {
-    const r = await fetch("/api/snapshot" + API_QS);
+    const r = await fetch("/api/snapshot" + apiQs());
     const data = await r.json();
     if (data.error) throw new Error(data.error);
     snap = data;
@@ -621,9 +763,32 @@ async function poll() {
     $("meta").textContent = "retrying…";
   }
 }
+let sigData = null;
+let lastSigTs = 0;
+async function pollSignals() {
+  try {
+    const r = await fetch("/api/signals" + apiQs());
+    const data = await r.json();
+    if (data.error) return;
+    sigData = data;
+    const el = document.querySelector("#sigline");
+    if (el) {
+      const names = (data.strategies || [])
+        .map(st => `${st.name} (${st.win_rate}% win, ${st.trades} trades)`) .join(" · ");
+      el.textContent = data.markers && data.markers.length
+        ? `Signals from ${data.unproven_fallback ? "best-available (unproven today)" : "proven >51%"} strategies: ${names}`
+        : "No strategy signals yet today.";
+    }
+    const newest = (data.markers || []).reduce((a, m) => Math.max(a, m.ts), 0);
+    if (lastSigTs && newest > lastSigTs) beep([523, 784], 0.12);  // fresh signal
+    lastSigTs = newest;
+    drawChart();
+  } catch (e) { /* transient */ }
+}
+
 async function pollBacktest() {
   try {
-    const r = await fetch("/api/backtest" + API_QS);
+    const r = await fetch("/api/backtest" + apiQs());
     const data = await r.json();
     if (!data.error) renderBacktest(data);
   } catch (e) { /* transient */ }
@@ -681,9 +846,10 @@ function checkAlerts() {
   prevPollPrice = px;
 }
 
-poll(); pollBacktest();
+poll(); pollBacktest(); pollSignals();
 setInterval(poll, 15000);
 setInterval(pollBacktest, 60000);
+setInterval(pollSignals, 60000);
 window.addEventListener("resize", drawChart);
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawChart);
 $("provenOnly").addEventListener("change", () => {

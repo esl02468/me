@@ -17,9 +17,10 @@ class handler(BaseHTTPRequestHandler):
         tf = qs.get("tf", ["1m"])[0]
         rb = qs.get("rb", [None])[0]
         demo = qs.get("demo", ["0"])[0] in ("1", "true")
+        symbol = qs.get("symbol", ["NQ=F"])[0][:24]
         try:
             candles = get_chart_candles(tf, float(rb) if rb else None,
-                                        demo=True if demo else None)
+                                        symbol=symbol, demo=True if demo else None)
             body = json.dumps({
                 "tf": tf, "rb": float(rb) if rb else None,
                 "candles": [

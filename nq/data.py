@@ -174,28 +174,42 @@ def is_demo() -> bool:
     return os.environ.get("NQ_DEMO", "").strip() in ("1", "true", "yes")
 
 
+# Futures -> real-time ETF proxy for the free live estimate.
+NOWCAST_PROXY = {
+    "NQ=F": "QQQ", "MNQ=F": "QQQ",
+    "ES=F": "SPY", "MES=F": "SPY",
+    "YM=F": "DIA", "MYM=F": "DIA",
+    "RTY=F": "IWM", "M2K=F": "IWM",
+    "GC=F": "GLD", "SI=F": "SLV", "CL=F": "USO",
+}
+
+
 def nowcast_from_qqq(fut_session: Session) -> dict | None:
-    """Free real-time NQ estimate: Yahoo serves QQQ (Nasdaq-100 ETF) quotes
-    in real time while CME futures are ~15 min delayed. Compute the NQ/QQQ
-    ratio over the timestamps both series share, then apply it to QQQ's
-    latest print. An estimate for charting/alerts — never for execution."""
+    """Free real-time estimate: Yahoo serves US ETFs in real time while CME
+    futures are ~15 min delayed. Compute the futures/ETF ratio over the
+    timestamps both series share, then apply it to the ETF's latest print.
+    An estimate for charting/alerts — never for execution."""
+    proxy = NOWCAST_PROXY.get(fut_session.symbol)
+    if not proxy:
+        return None
     try:
-        qqq = fetch_yahoo_session("QQQ")
+        etf = fetch_yahoo_session(proxy)
     except (urllib.error.URLError, KeyError, ValueError, OSError):
         return None
     fut_by_ts = {c.ts: c.close for c in fut_session.candles}
-    ratios = [fut_by_ts[c.ts] / c.close for c in qqq.candles if c.ts in fut_by_ts and c.close]
-    if len(ratios) < 5 or not qqq.candles:
+    ratios = [fut_by_ts[c.ts] / c.close for c in etf.candles if c.ts in fut_by_ts and c.close]
+    if len(ratios) < 5 or not etf.candles:
         return None
     tail = ratios[-30:]
     ratio = sum(tail) / len(tail)
-    last = qqq.candles[-1]
+    last = etf.candles[-1]
     return {
         "price": round(last.close * ratio, 2),
         "ratio": round(ratio, 4),
-        "qqq": round(last.close, 2),
-        "qqq_ts": last.ts,
-        "basis": "QQQ nowcast",
+        "proxy": proxy,
+        "proxy_price": round(last.close, 2),
+        "proxy_ts": last.ts,
+        "basis": f"{proxy} nowcast",
     }
 
 

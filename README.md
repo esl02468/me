@@ -90,14 +90,36 @@ STRONG BEARISH → STRONG BULLISH:
 | Prev close | trading above yesterday's close |
 | Momentum | last 10 minutes' net move exceeds ATR |
 
+## Instruments
+
+Pick any Yahoo symbol from the header dropdown (NQ, MNQ, ES, MES, YM, RTY,
+GC, SI, CL, BTC-USD, ETH-USD, SPY, QQQ, single stocks, or "custom…").
+Everything — chart, bias, levels, analyzer, signals — recomputes for the
+chosen symbol. `levels.json` supports per-symbol levels:
+`{"symbols": {"NQ=F": [...], "ES=F": [...]}}` (a legacy flat `levels` list
+still reads as NQ=F). The free live estimate maps futures to a real-time
+ETF proxy (NQ→QQQ, ES→SPY, YM→DIA, RTY→IWM, GC→GLD, CL→USO...).
+
+## Trading signals on the chart
+
+The Signals chip draws entry/exit markers from the strategies proven >51%
+win rate with ≥3 closed trades **today** (falling back to the two best
+available, labeled unproven, when none qualify): ▲ long entries, ▼ short
+entries, dashed connectors to × exits colored by result, ○ still-open
+trades. A summary line names the qualifying strategies with their live win
+rates, and a fresh signal triggers an audio chime when alerts are on.
+
 ## Chart
 
 TradingView-style interactions: mousewheel zooms around the cursor, drag
 pans, double-click resets. The crosshair shows a dynamic date-time badge on
 the time axis and a price badge on the price axis. Timeframe toggle: 1m /
 5m / 15m / 1h / 1D plus range bars (R2 / R5 / R10 points, built from 1m
-data). Levels are colored — red above price (resistance), green below
-(support); thick dashes are your levels, thin are auto. The 🔔 toggle
+data). Horizontal scroll (trackpad swipe or shift+wheel) pans the chart.
+Indicator chips toggle VWAP, EMA 9/21, Bollinger bands (20, 2σ, shaded),
+and the volume pane. Each level keeps one identity color, matched exactly
+between the chart line and the swatch in the Chart Levels card; thick
+dashes are your levels, thin are auto. The 🔔 toggle
 enables audio alerts: two-tone beep when price reaches a shown level
 (high pitch = resistance, low = support) and a three-note chime on a bias
 flip.
