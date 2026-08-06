@@ -481,6 +481,11 @@ function drawChart() {
       const mc = long ? upC : dnC;
       const yb = long ? y(cs[i].l) + 14 : y(cs[i].h) - 14;
       drawTriangle(ctx, x(i), yb, 6, long, mc);
+      if (m.score) {
+        ctx.fillStyle = mc;
+        ctx.textAlign = "center"; ctx.textBaseline = long ? "top" : "bottom";
+        ctx.fillText(String(Math.round(m.score)), x(i), long ? yb + 9 : yb - 9);
+      }
       if (m.exit != null && m.exit_ts != null) {
         const j = tsIdx.get(m.exit_ts);
         if (j !== undefined) {
@@ -641,8 +646,16 @@ chartEl.addEventListener("mousemove", e => {
     Math.floor((hoverPos.x - PADL) / plotW * cs.length)));
   const c = cs[i];
   const tip = $("tooltip");
+  let sigLine = "";
+  if (sigData && sigData.markers) {
+    const m = sigData.markers.find(mm => mm.ts === c.t);
+    if (m) sigLine = `<br><span style="color:${m.side === "long" ? "var(--up)" : "var(--down)"}">` +
+      `${m.side === "long" ? "▲" : "▼"} ${Math.round(m.score || 0)} · ${m.level || ""}</span> ` +
+      `<span style="color:var(--muted)">${m.reason || ""}</span>` +
+      (m.points != null ? ` <b>${m.points > 0 ? "+" : ""}${m.points} pts</b>` : "");
+  }
   tip.innerHTML = `${fmtDateTime(c.t)} &nbsp; O <b>${fmt(c.o)}</b> H <b>${fmt(c.h)}</b> ` +
-                  `L <b>${fmt(c.l)}</b> C <b>${fmt(c.c)}</b>`;
+                  `L <b>${fmt(c.l)}</b> C <b>${fmt(c.c)}</b>${sigLine}`;
   tip.style.display = "block";
   const tx = Math.min(rect.width - tip.offsetWidth - 8, e.clientX - rect.left + 12);
   tip.style.left = Math.max(4, tx) + "px";
@@ -882,9 +895,11 @@ async function pollSignals() {
     if (el) {
       const names = (data.strategies || [])
         .map(st => `${st.name} (${st.win_rate}% win, ${st.trades} trades)`) .join(" · ");
+      const st = (data.strategies || [])[0];
       el.textContent = data.markers && data.markers.length
-        ? `Actionable reversal signals (proven >51% win + profitable on this frame today): ${names}`
-        : "No reversal strategy has earned signal rights on this frame today (needs >51% win, PF>1, ≥5 trades).";
+        ? `Confluence reversal signals (score ≥ ${data.threshold || 60}: level quality + VWAP stretch + rejection ` +
+          `+ RSI-2 + volume). Today on this frame: ${st ? `${st.trades} closed, ${st.win_rate}% win, ${st.points > 0 ? "+" : ""}${st.points} pts net` : "none closed yet"}. Hover a marker's bar for its reasoning.`
+        : "No confluence signal on this frame yet — the engine waits for evidence to stack at a credible level.";
     }
     const newest = (data.markers || []).reduce((a, m) => Math.max(a, m.ts), 0);
     if (lastSigTs && newest > lastSigTs) beep([523, 784], 0.12);  // fresh signal

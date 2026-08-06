@@ -32,10 +32,11 @@ from nq.backtest import run_all
 from nq.bias import compute_bias
 from nq.data import Session, get_chart_candles, get_session, nowcast_from_qqq
 from nq.levels import Level, compute_auto_levels, load_levels, save_levels
+from nq.confluence import FIRE_THRESHOLD, detect as confluence_detect, simulate as confluence_simulate
 from nq.journal import record_markers, stats as journal_stats
 from nq.news import in_blackout, upcoming as news_upcoming
 from nq.notify import enabled as notify_enabled, push as notify_push
-from nq.reversal import rank_levels
+from nq.reversal import filter_proven, rank_levels
 
 ROOT = Path(__file__).parent
 INDEX = ROOT / "index.html"
@@ -61,14 +62,6 @@ def _cached(key: str, ttl: float, builder):
 
 _auto_levels = compute_auto_levels
 
-# Strategies whose signals ARE trend-reversal calls (mean reversion at a
-# level/band). Trend-following entries are deliberately excluded from the
-# chart's signal layer — the analyzer table still shows all 24.
-REVERSAL_STRATEGIES = {
-    "pivot_bounce", "level_bounce", "midday_vwap_revert", "keltner_fade",
-    "boll_revert", "rsi2_revert", "swing_failure", "engulfing_reversal",
-    "vwap_fade", "gap_fade",
-}
 MAX_MARKERS = 15
 
 
@@ -138,57 +131,63 @@ def build_signals(
     demo: bool | None = None, symbol: str = "NQ=F",
     tf: str = "1m", rb: float | None = None,
 ) -> dict:
-    """Entry/exit markers from strategies earning trust on the DISPLAYED
-    series (any timeframe or range-bar frame): everything with win rate
-    > 51% and >= 3 closed trades; if none qualify, the top 2 by win rate
-    with >= 3 trades, flagged unproven. Bar-based strategy parameters
-    (EMA 9/21, 20-bar channels, ...) adapt to the bar size, TradingView
-    indicator style."""
+    """Confluence reversal signals for the DISPLAYED series.
+
+    One engine, one explainable score: each bar near a still-credible
+    ranked level is scored on level quality, VWAP stretch, wick rejection,
+    RSI-2 exhaustion, volume, and momentum deceleration; a signal fires at
+    score >= FIRE_THRESHOLD with a freight-train veto and opposing-bias
+    damping. Outcomes are simulated with a symmetric 1.2 ATR bracket net
+    of costs, so the composite carries an honest record.
+    """
     if demo is None:
         demo = True if _demo else None
     sess: Session = get_session(symbol=symbol, demo=demo)
+    bias = compute_bias(sess)
     if rb or tf != "1m":
         sess = replace(sess, candles=get_chart_candles(tf, rb, symbol=symbol, demo=demo))
-    reports = run_all(sess)
-    # Actionable = reversal-family strategy proven on THIS series today:
-    # win rate > 51% AND net profitable (PF > 1) AND enough trades to mean it.
-    qualified = [
-        r for r in reports
-        if r.strategy.split("(")[0] in REVERSAL_STRATEGIES
-        and r.win_rate > 0.51
-        and r.profit_factor > 1.0
-        and len(r.closed) >= 5
+    user = [asdict(l) for l in load_levels(sess.symbol)]
+    scored = rank_levels(sess, user + _auto_levels(sess), bias)
+    credible = filter_proven(scored)  # drop levels proven wrong on this series
+    signals = confluence_detect(sess.candles, credible, bias)
+    report = confluence_simulate(signals, sess.candles)
+    closed = report.closed
+    markers = [
+        {
+            "strategy": "confluence",
+            "score": sig.score,
+            "reason": ", ".join(sig.reasons),
+            "level": sig.level_label,
+            "side": sig.side,
+            "ts": sig.entry_ts or sig.ts,
+            "price": sig.entry if sig.entry is not None else sig.price,
+            "exit_ts": sig.exit_ts,
+            "exit": sig.exit,
+            "points": sig.points,
+            "open": sig.open,
+        }
+        for sig in signals
     ]
-    fallback = False
-    markers = []
-    for r in qualified:
-        name = r.strategy.split("(")[0]
-        for t in r.trades:
-            markers.append({
-                "strategy": name,
-                "side": t.side,
-                "ts": t.entry_ts,
-                "price": t.entry,
-                "exit_ts": t.exit_ts,
-                "exit": t.exit,
-                "points": round(t.points, 2) if t.exit is not None else None,
-                "open": t.exit is None,
-            })
     markers.sort(key=lambda m: m["ts"])
     frame = f"R{rb}" if rb else tf
     record_markers(sess.symbol, frame, markers)
     _push_fresh_signals(sess.symbol, frame, markers)
-    markers = markers[-MAX_MARKERS:]  # only the recent, actionable ones
+    markers = markers[-MAX_MARKERS:]
     return {
         "tf": tf,
         "rb": rb,
         "symbol": sess.symbol,
+        "engine": "confluence",
+        "threshold": FIRE_THRESHOLD,
         "strategies": [
-            {"name": r.strategy.split("(")[0], "win_rate": round(r.win_rate * 100, 1),
-             "trades": len(r.closed), "points": round(r.total_points, 2)}
-            for r in qualified
-        ],
-        "unproven_fallback": fallback,
+            {
+                "name": "confluence",
+                "win_rate": round(report.win_rate * 100, 1),
+                "trades": len(closed),
+                "points": round(report.total_points, 2),
+            }
+        ] if closed else [],
+        "unproven_fallback": False,
         "markers": markers,
     }
 
