@@ -680,7 +680,7 @@ function renderHeader() {
     chg.className = d >= 0 ? "up" : "down";
   } else chg.textContent = "";
   const t = new Date(snap.ts * 1000).toLocaleTimeString();
-  $("meta").textContent = `${snap.source} · updated ${t}`;
+  $("meta").textContent = `${snap.source} · updated ${t}` + (snap.stale ? " · STALE (feed hiccup, showing last good)" : "");
   const est = snap.live_estimate;
   $("est").textContent = est ? `≈ ${fmt(est.price)} live est.` : "";
   $("est").title = est && est.basis ? `${est.basis} — estimate for context/alerts, not execution` : "";
@@ -877,7 +877,10 @@ async function poll() {
     fetchChartCandles();
     checkAlerts();
   } catch (e) {
-    $("err").textContent = "data error: " + e.message;
+    const p = new URLSearchParams(location.search);
+    p.set("demo", "1");
+    $("err").innerHTML = `Data feed unavailable: ${e.message}. Retrying every 15s — ` +
+      `or <a href="?${p.toString()}" style="color:var(--vwap)">switch to demo data</a> to check the app itself.`;
     $("err").style.display = "block";
     $("meta").textContent = "retrying…";
   }
