@@ -100,20 +100,34 @@ chosen symbol. `levels.json` supports per-symbol levels:
 still reads as NQ=F). The free live estimate maps futures to a real-time
 ETF proxy (NQ→QQQ, ES→SPY, YM→DIA, RTY→IWM, GC→GLD, CL→USO...).
 
-## Trading signals on the chart
+## Trading signals — the confluence engine
 
-Signals run on **whatever series the chart shows** — every timeframe (1m
-through 1D) and every range-bar frame — with bar-based strategy parameters
-adapting to the bar size, TradingView-indicator style. Only **actionable
-trend-reversal** signals draw: the strategy must be reversal-family
-(pivot/level bounce, VWAP/Bollinger/Keltner reversion, RSI-2, swing
-failure, gap fade, engulfing), and proven on that series **today** with
-win rate > 51% AND profit factor > 1 AND ≥ 5 closed trades. At most the
-15 most recent markers show. When nothing qualifies, the chart honestly
-shows no signals rather than unproven ones: ▲ long entries, ▼ short
-entries, dashed connectors to × exits colored by result, ○ still-open
-trades. A summary line names the qualifying strategies with their live win
-rates, and a fresh signal triggers an audio chime when alerts are on.
+The old signal layer replayed backtest entries from whichever heuristic
+strategies had a hot day — noisy and unexplainable. It's replaced by one
+**confluence engine** (`nq/confluence.py`): every bar near a still-credible
+ranked level is scored 0–100 for reversal quality —
+
+- **level quality** (0–35): the level's reversal-rank score (bounce
+  history, confluence, type prior)
+- **VWAP stretch** (0–25): ATRs of exhaustion fuel
+- **rejection bar** (0–20): hammer/shooting-star close, boosted on a
+  pierce-and-reclaim of the level
+- **RSI-2 exhaustion** (0–10), **volume surge** (0–5), **momentum
+  deceleration** (0–5)
+
+Gates: a level alone never fires (≥15 pts of secondary evidence required);
+a 10-bar freight-train drive against the reversal vetoes it; strong
+opposing bias damps 15%. Default threshold 60 (`NQ_CONFLUENCE_MIN`),
+one signal per level-side per 30 bars, outcomes simulated with a
+symmetric 1.2 ATR bracket **net of costs** and journaled.
+
+Calibration across 12 independent synthetic sessions: threshold 60 →
+~2 signals/day, 63.6% win rate, net positive; 65 → ~0.7/day at 75%.
+Every marker shows its score, and hovering its bar shows the full
+reasoning and outcome. On a strong trend day the engine may honestly show
+**zero** signals — refusing to catch falling knives is the feature.
+Signals run on whatever series the chart displays (all timeframes and
+range-bar frames).
 
 ## Chart
 
