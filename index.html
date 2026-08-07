@@ -124,6 +124,29 @@
   .tfbtn.active { color: var(--surface-1); background: var(--ink); border-color: var(--ink); }
   #err { color: var(--down); font-size: 13px; display: none; margin-top: 6px; }
   #srcnote { font-size: 11px; color: var(--muted); margin-top: 10px; }
+  /* ---- AlgoBox ---- */
+  #algo td { cursor: help; }
+  #algo tr.composite td { color: var(--ink); font-weight: 650;
+                          border-bottom: none; border-top: 1px solid var(--baseline); }
+  #algo td.dim { opacity: 0.55; }
+  .abar { position: relative; display: inline-block; vertical-align: middle;
+          height: 8px; width: 92px; background: var(--grid); border-radius: 3px; }
+  .abar i { position: absolute; top: 0; height: 8px; border-radius: 3px; display: block; }
+  .abar.split::after { content: ""; position: absolute; left: 50%; top: -2px;
+                       width: 1px; height: 12px; background: var(--baseline); }
+  .achip { display: inline-block; font: 600 10.5px system-ui, sans-serif;
+           text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted);
+           border: 1px solid var(--grid); border-radius: 4px; padding: 1px 5px;
+           margin-right: 6px; }
+  .aevent { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px;
+            color: var(--ink-2); padding: 3px 0; border-bottom: 1px solid var(--grid); }
+  .aevent time { color: var(--muted); font-variant-numeric: tabular-nums;
+                 flex: 0 0 42px; }
+  .aevent b { font-variant-numeric: tabular-nums; color: var(--ink); }
+  .aevent.long b { color: var(--up); } .aevent.short b { color: var(--down); }
+  #algoverdict { font-size: 13px; color: var(--ink-2); margin: 10px 0 4px; }
+  #algoverdict b { color: var(--ink); }
+  .warn { color: var(--down); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -203,6 +226,31 @@
       </label>
       <div id="levels"></div>
       <div id="srcnote">Edit levels.json to change your levels.</div>
+    </div>
+  </div>
+
+  <div class="card full" id="algocard">
+    <h2>AlgoBox — order flow read twice
+      <span style="font-weight:400; text-transform:none; letter-spacing:0">
+        — the same eight modules on bars and on the tape</span></h2>
+    <div id="algometa" style="font-size:11.5px; color:var(--muted); margin-bottom:8px">
+      loading…</div>
+    <table id="algo">
+      <thead><tr>
+        <th>Module</th>
+        <th colspan="2">Simple — bars</th>
+        <th colspan="2">Tick — tape</th>
+        <th>Δ</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="algoverdict"></div>
+    <div id="algoevents"></div>
+    <div class="lvl" style="border:none; font-size:11px; color:var(--muted); display:block">
+      Hover any cell for the module's full reasoning. Where the two engines
+      disagree is the part worth reading — agreement is only confirmation.
+      Without a tick file the tape is reconstructed from these same bars:
+      it adds resolution, not new information. Analysis, not trade advice.
     </div>
   </div>
 
@@ -304,6 +352,7 @@ document.querySelectorAll(".tfbtn[data-tf], .tfbtn[data-rb]").forEach(b => b.add
   follow = true; updateFollowBtn();
   fetchChartCandles();
   pollSignals();
+  pollAlgobox();
 }));
 let view = null;      // {start, end} candle indices; null = follow the full session
 let follow = true;    // auto-scroll to the newest bar as data arrives
@@ -962,6 +1011,106 @@ async function pollBacktest() {
   } catch (e) { /* transient */ }
 }
 
+/* ---------- AlgoBox: eight modules, two engines ---------- */
+function algoBar(m) {
+  // Directional modules get a centred -100..+100 bar; the speedometer has
+  // no side, so it gets a plain left-to-right 0..100 meter instead.
+  if (!m || m.confidence <= 0) return `<span style="color:var(--muted)">—</span>`;
+  if (m.key === "speed") {
+    const w = Math.max(0, Math.min(100, m.strength));
+    return `<span class="abar"><i style="left:0;width:${w}%;background:var(--vwap)"></i></span>`;
+  }
+  const s = Math.max(-100, Math.min(100, m.score));
+  const half = Math.abs(s) / 2;
+  const left = s >= 0 ? 50 : 50 - half;
+  const col = s >= 18 ? "var(--up)" : s <= -18 ? "var(--down)" : "var(--muted)";
+  return `<span class="abar split"><i style="left:${left}%;width:${half}%;background:${col}"></i></span>`;
+}
+function algoCell(m) {
+  if (!m || m.confidence <= 0) {
+    return `<td class="dim" title="this engine has nothing to say here">—</td><td></td>`;
+  }
+  const cls = m.key === "speed" ? "" : m.score >= 18 ? "pos" : m.score <= -18 ? "neg" : "";
+  const dim = m.confidence < 0.5 ? " dim" : "";
+  const num = m.key === "speed" ? m.strength.toFixed(0) : (m.score > 0 ? "+" : "") + m.score.toFixed(0);
+  const tip = `${m.detail}\n\nconfidence ${(m.confidence * 100).toFixed(0)}%`;
+  return `<td class="${cls}${dim}" title="${esc(tip)}">${esc(m.state)} <span ` +
+    `style="color:var(--muted); font-weight:400">${num}</span></td>` +
+    `<td>${algoBar(m)}</td>`;
+}
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function renderAlgobox(d) {
+  const S = d.simple, T = d.tick, cmp = d.comparison || {};
+  const srcLabel = { file: "real tick file", reconstructed: "reconstructed from these bars",
+                     none: "no tape" }[d.tick_source] || d.tick_source;
+  $("algometa").innerHTML =
+    `${d.bars} bars · ${(d.ticks || 0).toLocaleString()} prints ` +
+    `(<b>${esc(srcLabel)}</b>) · ATR ${fmt(d.atr)}` +
+    (d.tick_source === "reconstructed"
+      ? ` — set <code>ALGOBOX_TICK_FILE</code> to run the tick engines on real order flow`
+      : "");
+
+  const byKey = (r, k) => (r.modules || []).find(m => m.key === k);
+  const keys = (S.modules || []).map(m => m.key);
+  const rows = keys.map(k => {
+    const a = byKey(S, k), b = byKey(T, k);
+    const gap = (a && b && a.confidence > 0 && b.confidence > 0 && k !== "speed")
+      ? b.score - a.score : null;
+    const flip = gap != null && ((a.score > 10 && b.score < -10) || (a.score < -10 && b.score > 10));
+    return `<tr><td>${esc((a || b).name)}</td>${algoCell(a)}${algoCell(b)}` +
+      `<td class="${flip ? "warn" : ""}" title="${flip ? "the engines point opposite ways here" : ""}">` +
+      `${gap == null ? "—" : (gap > 0 ? "+" : "") + gap.toFixed(0)}</td></tr>`;
+  });
+  const comp = r => {
+    const cls = r.composite >= 18 ? "pos" : r.composite <= -18 ? "neg" : "";
+    return `<td class="${cls}" title="conviction ${r.conviction.toFixed(0)}/100${r.note ? "\n\n" + esc(r.note) : ""}">` +
+      `${esc(r.label)} <span style="color:var(--muted); font-weight:400">` +
+      `${(r.composite > 0 ? "+" : "") + r.composite.toFixed(0)}</span></td>` +
+      `<td>${algoBar({ key: "composite", score: r.composite, confidence: 1 })}</td>`;
+  };
+  rows.push(`<tr class="composite"><td>Composite</td>${comp(S)}${comp(T)}` +
+    `<td>${(cmp.composite_gap > 0 ? "+" : "") + (cmp.composite_gap ?? 0).toFixed(0)}</td></tr>`);
+  rows.push(`<tr class="composite" style="border-top:none"><td style="font-weight:400;color:var(--muted)">conviction</td>` +
+    `<td colspan="2" style="font-weight:400;color:var(--muted)">${S.conviction.toFixed(0)} / 100</td>` +
+    `<td colspan="2" style="font-weight:400;color:var(--muted)">${T.conviction.toFixed(0)} / 100</td><td></td></tr>`);
+  document.querySelector("#algo tbody").innerHTML = rows.join("");
+
+  const flips = cmp.flips || [];
+  $("algoverdict").innerHTML =
+    `<b>Agreement ${(cmp.agreement ?? 0).toFixed(0)}%</b> — ${esc(cmp.verdict || "")}` +
+    (flips.length ? ` <span class="warn">Opposite sides on: ${esc(flips.join(", "))}.</span>` : "");
+
+  // One list, both engines: same finding from two engines is one finding.
+  const seen = new Map();
+  for (const r of [S, T]) for (const e of (r.events || [])) {
+    const k = `${e.kind}|${e.side}|${Math.round(e.price)}`;
+    if (!seen.has(k) || seen.get(k).weight < e.weight) seen.set(k, e);
+  }
+  const evs = [...seen.values()].sort((a, b) => a.ts - b.ts).slice(-6);
+  $("algoevents").innerHTML = evs.length
+    ? evs.map(e => `<div class="aevent ${e.side}"><time>${hhmm(e.ts)}</time>` +
+        `<span class="achip">${esc(e.kind)}</span><b>${fmt(e.price)}</b>` +
+        `<span>${esc(e.text)}</span></div>`).join("")
+    : `<div style="font-size:12.5px;color:var(--muted)">No module flagged anything on this session yet.</div>`;
+}
+function hhmm(ts) {
+  return new Date(ts * 1000).toLocaleTimeString("en-US",
+    { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+async function pollAlgobox() {
+  try {
+    const extra = chartSel.rb ? { rb: chartSel.rb } : { tf: chartSel.tf };
+    const r = await fetch("/api/algobox" + apiQs(extra));
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    renderAlgobox(data);
+  } catch (e) {
+    $("algometa").innerHTML = `<span class="warn">AlgoBox unavailable: ${esc(e.message)}</span>`;
+  }
+}
+
 /* ---------- audio alerts (manual trading) ---------- */
 let audioCtx = null;
 const alerted = new Map();  // level price -> last alert epoch
@@ -1097,12 +1246,13 @@ async function pollLeaderboard() {
   } catch (e) { /* transient */ }
 }
 
-poll(); pollBacktest(); pollSignals(); pollJournal(); pollLeaderboard();
+poll(); pollBacktest(); pollSignals(); pollJournal(); pollLeaderboard(); pollAlgobox();
 setInterval(pollLeaderboard, 300000);
 setInterval(pollJournal, 120000);
 setInterval(poll, 15000);
 setInterval(pollBacktest, 60000);
 setInterval(pollSignals, 60000);
+setInterval(pollAlgobox, 60000);
 window.addEventListener("resize", drawChart);
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawChart);
 $("provenOnly").addEventListener("change", () => {

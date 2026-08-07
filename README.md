@@ -16,7 +16,11 @@ python3 analyze.py
 python3 analyze.py --trades          # include the per-trade log
 python3 analyze.py --strategy orb    # single strategy
 
-# 3. Dashboard: live chart + levels + bias + analyzer
+# 3. AlgoBox: eight order-flow modules, on bars and on the tape
+python3 -m algobox                   # both engines, side by side
+python3 -m algobox --ticks trades.csv  # tick engines on real order flow
+
+# 4. Dashboard: live chart + levels + bias + analyzer + AlgoBox
 python3 dashboard.py                 # → http://localhost:8787
 ```
 
@@ -40,6 +44,19 @@ it if it dies, opens the firewall port, and prints the URL —
 phone. The token is the password: keep the URL private. Re-run the script
 any time to update the code (URL stays the same).
 
+Nothing is installed beyond Python and Git — the toolkit is standard
+library only, so AlgoBox and everything else arrive with a `git pull`.
+
+To run an unmerged branch on the box before it lands on `main`:
+
+```powershell
+.\setup.ps1 -Branch claude/some-branch    # try it
+.\setup.ps1 -Branch main                  # go back
+```
+
+Updates only touch tracked files, so `token.txt` (your URL stays the same)
+and `journal.db` (your accumulated track record) both survive.
+
 `dashboard.py` flags behind this: `--host 0.0.0.0` binds publicly,
 `--token <secret>` requires the token on every request (also honored as an
 `X-NQ-Token` header or `NQ_TOKEN` env var).
@@ -53,6 +70,41 @@ production URL. Append `?demo=1` to the page URL to force the synthetic
 session (useful if the data source rate-limits cloud IPs). The cloud
 deployment is read-only — change levels by editing `levels.json` and
 pushing.
+
+### The Vercel deployment is password protected
+
+`middleware.js` puts HTTP Basic auth in front of **everything** Vercel
+serves — the page and every `/api/*` route. Set two environment variables
+in the Vercel project (Settings → Environment Variables), for **both**
+Production and Preview:
+
+| Variable | |
+|---|---|
+| `SITE_PASSWORD` | required — the password |
+| `SITE_USER` | optional, defaults to `nq` |
+
+Then redeploy. Visiting the URL gives the browser's native password
+prompt; the credentials are sent over HTTPS and cached by the browser for
+the session.
+
+**It fails closed.** With no `SITE_PASSWORD` set, every request gets a 503
+explaining why, rather than quietly serving the dashboard to the world — a
+guard that disables itself when misconfigured is worse than no guard,
+because from outside you can't tell the difference. So set the variable
+*before* deploying, and set it on Preview too or PR previews will 503.
+
+Verify it from the outside, not from the Vercel dashboard:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://<your-url>/            # 401
+curl -s -o /dev/null -w '%{http_code}\n' https://<your-url>/api/snapshot  # 401
+curl -s -o /dev/null -w '%{http_code}\n' -u nq:<password> https://<your-url>/  # 200
+```
+
+One password, shared — this is site-level access control, not user
+accounts. Rotate it by changing the env var and redeploying. This does
+**not** cover the VPS deployment, which is a separate machine: use
+`dashboard.py --token` there.
 
 ## Data sources
 
@@ -128,6 +180,96 @@ reasoning and outcome. On a strong trend day the engine may honestly show
 **zero** signals — refusing to catch falling knives is the feature.
 Signals run on whatever series the chart displays (all timeframes and
 range-bar frames).
+
+## AlgoBox — order flow, read twice
+
+`algobox/` is a suite of eight modules, each of which answers the same
+question in **two versions**:
+
+- **simple** — everything derived from OHLCV bars. Works on any feed, any
+  timeframe, in milliseconds.
+- **tick-level** — everything derived from the print stream: aggressor
+  side, per-price ladders, and time.
+
+Same eight modules, same output shape, so they can be run side by side.
+That comparison *is* the product. Bars and tape agreeing is confirmation;
+the tape saying "buyers absorbed at 23500" while the bars say "clean
+breakout" is the part you couldn't have seen otherwise.
+
+| Module | What the bars can see | What the tape adds |
+|---|---|---|
+| **Speedometer** | volume/range per bar vs the session median | prints/sec and contracts/sec, plus the peak 5-second burst |
+| **Trend strength** | EMA9/21 separation in ATRs, close consistency, ADX-lite | how much of the move the delta actually paid for; aggressor run lengths vs a coin flip |
+| **Cumulative delta** | close-position-weighted volume, and its divergence from price | true signed volume, trade by trade |
+| **Aggression** | share of volume closing in the upper half of its bar | share of prints lifting the offer, and whether buyers or sellers are the bigger prints |
+| **Stacked imbalance** | price bands crossed one way only across 30 bars | the classic 3:1 diagonal test on the real ladder, stacked 3 deep |
+| **Absorption** | heavy volume in a small range, delta one-sided | *which price* took the size, how one-sided it was there, and how few ticks it moved |
+| **Liquidity sweep** | a level pierced on heavy volume and closed back through | contracts traded beyond the level and how many seconds price stayed through it |
+| **Volume zones** | volume spread along each bar's implied path → POC, value area, HVN/LVN | true volume-at-price, and which side built the POC |
+
+Directional modules score −100…+100; the speedometer has no side, so it
+never votes — it damps conviction when the tape is dead. The composite is
+a confidence-weighted blend (delta and absorption carry the most weight,
+because they are the two that most often disagree with price — a composite
+that only echoes price is not worth computing).
+
+### Where the tick data comes from — read this
+
+The free feeds this repo uses (Yahoo, Stooq) do not sell tick data. So:
+
+```bash
+export ALGOBOX_TICK_FILE=/path/to/trades.csv   # or --ticks trades.csv
+```
+
+points every tick-level module at a real tape. The CSV needs `price` and a
+timestamp; `size`, `side`/`aggressor`, and `bid`/`ask` are used when
+present, and aggressors are inferred with the tick rule when they aren't.
+
+**Without a tick file, the tape is reconstructed from the same bars.**
+Reconstruction preserves what the bar proves — open, high, low, close,
+volume, a plausible path — and models the rest. Aggressor side comes
+strictly from the path: prints made on the way up lifted the offer, prints
+made on the way down hit the bid, and prints that moved nothing are split
+in the proportion the bar closed at. **Nothing random ever touches side.**
+An earlier draft added a random "hidden flow" term so reconstructed delta
+would diverge from price the way real delta does; it was cut, because it
+made the tick engines report a direction that came from a seed. A number
+that changes sign between runs is not analysis.
+
+So reconstructed tick readings add *resolution* — where in the bar the
+volume traded, at which prices, in what runs, how long price spent through
+a level — but they cannot reveal flow the bars don't already imply. They
+carry `confidence` 0.6, every panel labels `tick_source`, and the
+dashboard says so on the card. If the difference matters to your decision,
+get a tick file.
+
+Reconstruction is deterministic and content-addressed: identical OHLCV
+always yields identical prints, so a polling dashboard doesn't flicker and
+appending new bars never rewrites the history of old ones.
+
+### Using it
+
+```bash
+python3 -m algobox                       # both engines, side by side
+python3 -m algobox --demo                # synthetic session, no network
+python3 -m algobox --engine tick         # tape only
+python3 -m algobox --symbol ES=F --tf 5m
+python3 -m algobox --json                # machine-readable
+```
+
+```python
+from algobox import analyze
+analyze("NQ=F", engine="both")           # dict, JSON-ready
+```
+
+`GET /api/algobox[?symbol=&tf=&rb=&engine=&demo=1]` serves the same thing
+to the dashboard's AlgoBox card, which shows both engines, the per-module
+gap, and flags any module where the two point opposite ways.
+
+**Limits.** These are transparent heuristics with hand-set thresholds, not
+a fitted model, and they carry no track record — unlike the confluence
+engine, AlgoBox readings are not journaled or win-rate tested. Read it as
+context for a decision, not as a signal to trade.
 
 ## Chart
 
@@ -285,12 +427,20 @@ commissions; delayed data means live readings lag the tape.
 ## Layout
 
 ```
-nq/data.py       market data (Yahoo → Stooq → demo generator)
-nq/bias.py       bias engine (VWAP, EMA, ATR, opening range)
-nq/backtest.py   strategies + reports
-nq/levels.py     levels.json load/save
-fetch_nq.py      terminal fetcher/bias CLI
-analyze.py       terminal backtest CLI
-dashboard.py     stdlib HTTP server + JSON API
-static/dashboard.html   the dashboard UI (self-contained)
+nq/data.py         market data (Yahoo → Stooq → demo generator)
+nq/bias.py         bias engine (VWAP, EMA, ATR, opening range)
+nq/backtest.py     strategies + reports
+nq/levels.py       levels.json load/save
+nq/confluence.py   the reversal signal engine
+algobox/core.py    AlgoBox types + the simple/tick module contract
+algobox/ticks.py   tick files, bar→tick reconstruction, footprints
+algobox/flow.py    delta, aggression, imbalance, absorption
+algobox/tape.py    speedometer, liquidity sweeps
+algobox/structure.py  volume zones, trend strength
+algobox/suite.py   runs both engines and compares them
+fetch_nq.py        terminal fetcher/bias CLI
+analyze.py         terminal backtest CLI
+dashboard.py       stdlib HTTP server + JSON API
+index.html         the dashboard UI (self-contained)
+tests/             python3 -m unittest discover tests
 ```
