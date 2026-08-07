@@ -44,6 +44,19 @@ it if it dies, opens the firewall port, and prints the URL —
 phone. The token is the password: keep the URL private. Re-run the script
 any time to update the code (URL stays the same).
 
+Nothing is installed beyond Python and Git — the toolkit is standard
+library only, so AlgoBox and everything else arrive with a `git pull`.
+
+To run an unmerged branch on the box before it lands on `main`:
+
+```powershell
+.\setup.ps1 -Branch claude/some-branch    # try it
+.\setup.ps1 -Branch main                  # go back
+```
+
+Updates only touch tracked files, so `token.txt` (your URL stays the same)
+and `journal.db` (your accumulated track record) both survive.
+
 `dashboard.py` flags behind this: `--host 0.0.0.0` binds publicly,
 `--token <secret>` requires the token on every request (also honored as an
 `X-NQ-Token` header or `NQ_TOKEN` env var).
