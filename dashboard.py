@@ -7,6 +7,7 @@ server-side so the browser never hits CORS walls:
   GET  /               dashboard UI
   GET  /api/snapshot   candles + price + bias + auto levels + user levels
   GET  /api/backtest   strategy analyzer results for today's session
+  GET  /api/algobox    AlgoBox suite, simple + tick engines side by side
   GET  /api/levels     user levels from levels.json
   POST /api/levels     replace user levels (dashboard editor)
 
@@ -28,6 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from algobox.suite import analyze as algobox_analyze
 from nq.backtest import COST_POINTS, run_all
 from nq.bias import atr, compute_bias
 from nq.data import Session, get_chart_candles, get_session, nowcast_from_qqq
@@ -199,6 +201,23 @@ def build_signals(
     }
 
 
+def build_algobox(
+    demo: bool | None = None, symbol: str = "NQ=F",
+    tf: str = "1m", rb: float | None = None, engine: str = "both",
+) -> dict:
+    """AlgoBox: eight order-flow modules, each read twice.
+
+    The `simple` engine derives everything from OHLCV; the `tick` engine
+    reads the print stream (a real tick file when ALGOBOX_TICK_FILE points
+    at one, otherwise a deterministic reconstruction of the same bars —
+    `tick_source` says which). The `comparison` block is the point: where
+    the bars and the tape disagree is where there is something to learn.
+    """
+    if demo is None:
+        demo = True if _demo else None
+    return algobox_analyze(symbol=symbol, demo=demo, engine=engine, tf=tf, rb=rb)
+
+
 _pushed: set = set()
 
 
@@ -323,6 +342,16 @@ class Handler(BaseHTTPRequestHandler):
                 rb_val = float(rb) if rb else None
                 self._json(_cached(f"signals:{symbol}:{tf}:{rb_val}:{dkey}", 30.0,
                                    lambda: build_signals(demo=demo_q, symbol=symbol, tf=tf, rb=rb_val)))
+            elif route == "/api/algobox":
+                tf = qs.get("tf", ["1m"])[0]
+                rb = qs.get("rb", [None])[0]
+                rb_val = float(rb) if rb else None
+                engine = qs.get("engine", ["both"])[0]
+                if engine not in ("both", "simple", "tick"):
+                    engine = "both"
+                self._json(_cached(f"algobox:{symbol}:{tf}:{rb_val}:{engine}:{dkey}", 20.0,
+                                   lambda: build_algobox(demo=demo_q, symbol=symbol,
+                                                         tf=tf, rb=rb_val, engine=engine)))
             elif route == "/api/candles":
                 tf = qs.get("tf", ["1m"])[0]
                 rb = qs.get("rb", [None])[0]
