@@ -28,8 +28,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from nq.backtest import run_all
-from nq.bias import compute_bias
+from nq.backtest import COST_POINTS, run_all
+from nq.bias import atr, compute_bias
 from nq.data import Session, get_chart_candles, get_session, nowcast_from_qqq
 from nq.levels import Level, compute_auto_levels, load_levels, save_levels
 from nq.confluence import FIRE_THRESHOLD, detect as confluence_detect, simulate as confluence_simulate
@@ -219,6 +219,67 @@ def _push_fresh_signals(symbol: str, frame: str, markers: list[dict]) -> None:
     )
 
 
+LEADERBOARD_FRAMES = ("1m", "5m", "15m", "1h")
+MIN_LB_TRADES = 5
+
+
+def build_leaderboard(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
+    """Rank every published strategy across every timeframe by measured,
+    cost-honest expectancy on THIS instrument.
+
+    There is no public register of "the world's best" strategies — the
+    genuinely elite ones are never published. This ranks the public canon
+    (34 named setups) by what it actually did on your data: expectancy per
+    trade net of costs, with win rate, profit factor, and sample size shown
+    so a hot small sample can't masquerade as an edge.
+    """
+    if demo is None:
+        demo = True if _demo else None
+    base: Session = get_session(symbol=symbol, demo=demo)
+    rows = []
+    for tf in LEADERBOARD_FRAMES:
+        try:
+            sess = base if tf == "1m" else replace(
+                base, candles=get_chart_candles(tf, None, symbol=symbol, demo=demo))
+        except Exception:
+            continue
+        if len(sess.candles) < 60:
+            continue
+        # Normalizer: a 1h bar moves far more than a 1m bar, so raw points
+        # would rank timeframes, not strategies. Expectancy is expressed in
+        # ATR units of its own frame — comparable across frames.
+        frame_atr = atr(sess.candles) or 1.0
+        for r in run_all(sess):
+            closed = r.closed
+            if len(closed) < MIN_LB_TRADES:
+                continue
+            pf = r.profit_factor
+            exp_pts = r.total_points / len(closed)
+            rows.append({
+                "strategy": r.strategy.split("(")[0],
+                "frame": tf,
+                "trades": len(closed),
+                "win_rate": round(r.win_rate * 100, 1),
+                "points": round(r.total_points, 2),
+                "expectancy": round(exp_pts, 3),
+                "exp_atr": round(exp_pts / frame_atr, 3),
+                "profit_factor": round(pf, 2) if pf != float("inf") else 99.0,
+                "max_dd": round(r.max_drawdown_points, 2),
+                "proven": bool(r.win_rate > 0.51 and pf > 1.0),
+            })
+    # Rank by ATR-normalized expectancy, tie-broken by sample size.
+    rows.sort(key=lambda r: (r["exp_atr"], r["trades"]), reverse=True)
+    return {
+        "symbol": base.symbol,
+        "source": base.source,
+        "frames": list(LEADERBOARD_FRAMES),
+        "min_trades": MIN_LB_TRADES,
+        "cost_pts": COST_POINTS,
+        "rows": rows[:25],
+        "total_tested": len(rows),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
@@ -275,6 +336,9 @@ class Handler(BaseHTTPRequestHandler):
                                                    demo=demo_q if demo_q else (True if _demo else None))
                     ],
                 }))
+            elif route == "/api/leaderboard":
+                self._json(_cached(f"leaderboard:{symbol}:{dkey}", 300.0,
+                                   lambda: build_leaderboard(demo=demo_q, symbol=symbol)))
             elif route == "/api/journal":
                 days = int(qs.get("days", ["30"])[0])
                 self._json({"days": days, "rows": journal_stats(days)})

@@ -1,10 +1,17 @@
-"""Extended strategy library: 18 classic intraday setups on one engine.
+"""Extended strategy library: 28 published intraday setups on one engine.
 
 Every strategy is a signal function run through the same execution engine
 (next-bar-open fills, ATR-scaled bracket, optional time stop), so results
 are comparable and adding a strategy is ~5 lines. Together with the five
 hand-written strategies in backtest.py and level_bounce, the analyzer
-scans 24 named strategies per session.
+scans 34 named strategies per session.
+
+These are the *published* setups — Raschke's Holy Grail and 80-20, the
+original Turtle channel breakouts, Crabel's NR7, the TTM squeeze,
+Supertrend, Connors RSI-2, Donchian, MACD, Bollinger/Keltner work, and
+the session-structure classics. Nobody publishes a genuinely elite
+private edge; what this library offers is honest measurement of the
+public canon on your own instrument.
 
 These are the textbook versions of widely known setups — the point is
 breadth of honest measurement, not secret sauce. The >51% filter decides
@@ -62,6 +69,61 @@ def rolling_extreme(vals: list[float], period: int, high: bool) -> list[float]:
         window = vals[max(0, i - period):i]
         out[i] = max(window) if high else min(window)
     return out
+
+
+def adx_series(candles: list[Candle], period: int = 14) -> list[float]:
+    """Wilder's ADX — trend strength, used by the Holy Grail setup."""
+    n = len(candles)
+    out = [0.0] * n
+    if n < period + 2:
+        return out
+    tr_s = dm_p_s = dm_m_s = 0.0
+    dx_hist: list[float] = []
+    for i in range(1, n):
+        cur, prev = candles[i], candles[i - 1]
+        up, down = cur.high - prev.high, prev.low - cur.low
+        dm_p = up if (up > down and up > 0) else 0.0
+        dm_m = down if (down > up and down > 0) else 0.0
+        tr = max(cur.high - cur.low, abs(cur.high - prev.close), abs(cur.low - prev.close))
+        if i <= period:
+            tr_s += tr; dm_p_s += dm_p; dm_m_s += dm_m
+        else:
+            tr_s = tr_s - tr_s / period + tr
+            dm_p_s = dm_p_s - dm_p_s / period + dm_p
+            dm_m_s = dm_m_s - dm_m_s / period + dm_m
+        if tr_s > 0:
+            di_p = 100 * dm_p_s / tr_s
+            di_m = 100 * dm_m_s / tr_s
+            denom = di_p + di_m
+            dx = 100 * abs(di_p - di_m) / denom if denom else 0.0
+            dx_hist.append(dx)
+            if len(dx_hist) >= period:
+                out[i] = sum(dx_hist[-period:]) / period
+    return out
+
+
+def supertrend_series(
+    candles: list[Candle], period: int = 10, mult: float = 3.0
+) -> list[int]:
+    """+1 uptrend / -1 downtrend, the standard ATR-band flip indicator."""
+    n = len(candles)
+    atrs = atr_series(candles, period)
+    dirs = [1] * n
+    upper = lower = None
+    for i in range(1, n):
+        c = candles[i]
+        mid = (c.high + c.low) / 2
+        a = atrs[i] or 1.0
+        up, lo = mid + mult * a, mid - mult * a
+        upper = up if upper is None or c.close > upper else min(up, upper)
+        lower = lo if lower is None or c.close < lower else max(lo, lower)
+        if c.close > (upper or up):
+            dirs[i] = 1
+        elif c.close < (lower or lo):
+            dirs[i] = -1
+        else:
+            dirs[i] = dirs[i - 1]
+    return dirs
 
 
 def stdev_series(vals: list[float], period: int = 20) -> list[float]:
@@ -301,8 +363,106 @@ def extended_strategies(
         if lows[i] < don_lo[i] and closes[i] > don_lo[i]:
             return "long"
 
+    adx = adx_series(candles)
+    st = supertrend_series(candles)
+    e50 = ema(closes, 50)
+    don_hi55 = rolling_extreme(highs, 55, True)
+    don_lo55 = rolling_extreme(lows, 55, False)
+
+    def sig_holy_grail(i):
+        """Linda Raschke's Holy Grail: strong ADX trend, pull back to EMA20,
+        resume in the trend direction."""
+        if adx[i] < 30:
+            return None
+        if e20[i] > e50[i] and lows[i] <= e20[i] and closes[i] > e20[i] and closes[i] > closes[i - 1]:
+            return "long"
+        if e20[i] < e50[i] and highs[i] >= e20[i] and closes[i] < e20[i] and closes[i] < closes[i - 1]:
+            return "short"
+
+    def sig_eighty_twenty(i):
+        """Raschke/Connors 80-20: a bar opens in the top 20% of its range and
+        closes in the bottom 20% (or vice versa) — a failed extreme."""
+        p = candles[i - 1]
+        rng = max(p.high - p.low, 1e-9)
+        op = (p.open - p.low) / rng
+        cl = (p.close - p.low) / rng
+        if op >= 0.8 and cl <= 0.2 and closes[i] < p.low:
+            return "short"
+        if op <= 0.2 and cl >= 0.8 and closes[i] > p.high:
+            return "long"
+
+    def sig_turtle_55(i):
+        """Original Turtle system 2: 55-bar channel breakout."""
+        if closes[i] > don_hi55[i]:
+            return "long"
+        if closes[i] < don_lo55[i]:
+            return "short"
+
+    def sig_nr7_break(i):
+        """NR7 (Crabel): narrowest range of 7 bars, then trade the break."""
+        rngs = [highs[j] - lows[j] for j in range(i - 6, i + 1)]
+        if rngs[-1] != min(rngs):
+            return None
+        if closes[i] > highs[i - 1]:
+            return "long"
+        if closes[i] < lows[i - 1]:
+            return "short"
+
+    def sig_squeeze_break(i):
+        """Bollinger squeeze inside Keltner, then expansion — the TTM setup."""
+        squeezed = boll_up[i - 1] < kel_up[i - 1] and boll_lo[i - 1] > kel_lo[i - 1]
+        if not squeezed:
+            return None
+        if closes[i] > boll_up[i]:
+            return "long"
+        if closes[i] < boll_lo[i]:
+            return "short"
+
+    def sig_supertrend_flip(i):
+        if st[i] == 1 and st[i - 1] == -1:
+            return "long"
+        if st[i] == -1 and st[i - 1] == 1:
+            return "short"
+
+    def sig_ema50_reclaim(i):
+        """Institutional-style trend filter: reclaim of the 50 EMA with a
+        confirming close."""
+        if closes[i - 1] < e50[i - 1] and closes[i] > e50[i] and e20[i] > e50[i]:
+            return "long"
+        if closes[i - 1] > e50[i - 1] and closes[i] < e50[i] and e20[i] < e50[i]:
+            return "short"
+
+    def sig_failed_break(i):
+        """Liquidity sweep / stop-run: break the 20-bar extreme, then close
+        back inside within two bars."""
+        swept_hi = max(highs[i - 2:i]) > don_hi[i - 2]
+        swept_lo = min(lows[i - 2:i]) < don_lo[i - 2]
+        if swept_hi and closes[i] < don_hi[i - 2]:
+            return "short"
+        if swept_lo and closes[i] > don_lo[i - 2]:
+            return "long"
+
+    def sig_vwap_std_revert(i):
+        """Fade the second standard-deviation band around VWAP."""
+        dev = sd20[i]
+        if not dev:
+            return None
+        if closes[i] > vw[i] + 2 * dev:
+            return "short"
+        if closes[i] < vw[i] - 2 * dev:
+            return "long"
+
     specs = [
         # (name, signal, target_atr, stop_atr, max_hold, warmup)
+        ("holy_grail", sig_holy_grail, 2.0, 1.0, None, 55),
+        ("eighty_twenty", sig_eighty_twenty, 1.5, 1.0, 30, 30),
+        ("turtle_55_break", sig_turtle_55, 3.0, 1.5, None, 60),
+        ("nr7_break", sig_nr7_break, 1.5, 1.0, None, 30),
+        ("squeeze_break", sig_squeeze_break, 2.0, 1.0, None, 35),
+        ("supertrend_flip", sig_supertrend_flip, 2.0, 1.2, None, 30),
+        ("ema50_reclaim", sig_ema50_reclaim, 2.0, 1.2, None, 55),
+        ("failed_break", sig_failed_break, 1.2, 1.2, 25, 30),
+        ("vwap_std_revert", sig_vwap_std_revert, 1.0, 1.5, 25, 30),
         ("rsi2_revert", sig_rsi2_revert, 1.0, 1.5, 20, 30),
         ("rsi14_cross50", sig_rsi14_cross50, 1.5, 1.0, None, 30),
         ("boll_revert", sig_boll_revert, 1.0, 1.5, 25, 30),
