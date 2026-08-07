@@ -58,6 +58,41 @@ session (useful if the data source rate-limits cloud IPs). The cloud
 deployment is read-only — change levels by editing `levels.json` and
 pushing.
 
+### The Vercel deployment is password protected
+
+`middleware.js` puts HTTP Basic auth in front of **everything** Vercel
+serves — the page and every `/api/*` route. Set two environment variables
+in the Vercel project (Settings → Environment Variables), for **both**
+Production and Preview:
+
+| Variable | |
+|---|---|
+| `SITE_PASSWORD` | required — the password |
+| `SITE_USER` | optional, defaults to `nq` |
+
+Then redeploy. Visiting the URL gives the browser's native password
+prompt; the credentials are sent over HTTPS and cached by the browser for
+the session.
+
+**It fails closed.** With no `SITE_PASSWORD` set, every request gets a 503
+explaining why, rather than quietly serving the dashboard to the world — a
+guard that disables itself when misconfigured is worse than no guard,
+because from outside you can't tell the difference. So set the variable
+*before* deploying, and set it on Preview too or PR previews will 503.
+
+Verify it from the outside, not from the Vercel dashboard:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://<your-url>/            # 401
+curl -s -o /dev/null -w '%{http_code}\n' https://<your-url>/api/snapshot  # 401
+curl -s -o /dev/null -w '%{http_code}\n' -u nq:<password> https://<your-url>/  # 200
+```
+
+One password, shared — this is site-level access control, not user
+accounts. Rotate it by changing the env var and redeploying. This does
+**not** cover the VPS deployment, which is a separate machine: use
+`dashboard.py --token` there.
+
 ## Data sources
 
 Live data comes from Yahoo Finance's public chart API (`NQ=F`, 1-minute
