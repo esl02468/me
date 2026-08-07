@@ -243,16 +243,35 @@ the next reversal can happen, so only evidence against a level removes it.
 Use `--all` (CLI) or untick the checkbox (dashboard) to see everything;
 `--min-rate 0.6` raises the bar.
 
-## Strategy Analyzer — 24 strategies
+## Strategy leaderboard
+
+`/api/leaderboard` and the dashboard's leaderboard card rank **every**
+published strategy across 1m/5m/15m/1h on the selected instrument —
+typically 80+ strategy×timeframe combinations — by **expectancy per trade
+in ATR units**, so timeframes compare fairly (raw points would just rank
+bar size). Net of costs, minimum 5 trades, ✓ marking win rate > 51% with
+profit factor > 1.
+
+There is no public register of "the world's best" trading strategies: the
+genuinely elite ones are never published. What this ranks is the public
+canon — Raschke's Holy Grail and 80-20, the original Turtle channel
+breakouts, Crabel's NR7, the TTM squeeze, Supertrend, Connors RSI-2,
+Donchian, MACD, Bollinger/Keltner, opening-range and session-structure
+plays — measured honestly on your own instrument. One session is never
+proof; the journal is where multi-day evidence accumulates.
+
+## Strategy Analyzer — 34 strategies
 
 Backtests today's 1-minute candles with next-bar-open fills, one contract,
-no costs, across 24 named classic setups: EMA cross, opening-range
-breakout, VWAP fade/reclaim, EMA pullback, level bounce, Connors RSI-2,
-RSI-50 cross, Bollinger reversion + breakout, Keltner fade, MACD cross,
-Donchian (turtle) breakout, inside-bar breakout, engulfing reversal,
-three-bar pullback, gap fade, gap-and-go, initial-balance breakout,
-midday VWAP reversion, momentum thrust, ATR trend ride, opening drive,
-floor-pivot bounce, and swing-failure. All share one execution engine so
+no costs beyond the charged friction, across 34 named published setups:
+EMA cross, opening-range breakout, VWAP fade/reclaim, EMA pullback, level
+bounce, Connors RSI-2, RSI-50 cross, Bollinger reversion + breakout,
+Keltner fade, MACD cross, Donchian and Turtle-55 breakouts, inside-bar
+breakout, engulfing reversal, three-bar pullback, gap fade, gap-and-go,
+initial-balance breakout, midday VWAP reversion, momentum thrust, ATR
+trend ride, opening drive, floor-pivot bounce, swing failure, Raschke's
+Holy Grail and 80-20, Crabel's NR7, the TTM squeeze, Supertrend flip,
+EMA-50 reclaim, failed-break liquidity sweeps, and VWAP σ-band reversion. All share one execution engine so
 results are comparable; the >51% filter surfaces the ones earning trust
 today. Add a strategy in ~5 lines in `nq/strategies.py`.
 

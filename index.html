@@ -207,6 +207,22 @@
   </div>
 
   <div class="card full">
+    <h2>Strategy leaderboard — every published setup, every timeframe</h2>
+    <div id="lbnote" style="font-size:12px; color:var(--ink-2); margin-bottom:8px"></div>
+    <div style="overflow-x:auto"><table id="lb"><thead><tr>
+      <th>#</th><th>Strategy</th><th>Frame</th><th>Trades</th><th>Win %</th>
+      <th>Exp/trade (ATR)</th><th>Exp (pts)</th><th>PF</th><th>Net pts</th><th>Max DD</th>
+    </tr></thead><tbody></tbody></table></div>
+    <div style="font-size:11px; color:var(--muted); margin-top:8px; line-height:1.5">
+      Ranked by expectancy per trade in ATR units, so timeframes compare fairly (a 1h bar moves
+      further than a 1m bar). Net of costs, minimum 5 trades; ✓ marks win rate &gt; 51% with profit
+      factor &gt; 1. These are the published setups — nobody publishes a genuinely elite private edge,
+      so this measures the public canon honestly on your instrument. One session is not proof:
+      the journal below is where multi-day evidence accumulates.
+    </div>
+  </div>
+
+  <div class="card full">
     <h2>Track record — signal journal</h2>
     <table id="journal"><thead><tr>
       <th>Strategy</th><th>Frame</th><th>Symbol</th><th>Days</th><th>Trades</th><th>Win %</th><th>Net pts</th>
@@ -852,7 +868,34 @@ async function pollJournal() {
   } catch (e) { /* transient */ }
 }
 
-poll(); pollBacktest(); pollSignals(); pollJournal();
+async function pollLeaderboard() {
+  try {
+    const r = await fetch("/api/leaderboard" + apiQs());
+    const data = await r.json();
+    const tb = document.querySelector("#lb tbody");
+    if (data.error || !data.rows) {
+      tb.innerHTML = `<tr><td colspan="10" style="color:var(--muted)">leaderboard unavailable</td></tr>`;
+      return;
+    }
+    $("lbnote").textContent =
+      `${data.total_tested} strategy×timeframe combinations tested on ${data.symbol} ` +
+      `(${data.frames.join(", ")}), ${data.cost_pts} pts cost charged per trade. Top 25 shown.`;
+    tb.innerHTML = data.rows.map((r2, i) => {
+      const pcls = r2.points > 0 ? "pos" : r2.points < 0 ? "neg" : "";
+      const badge = r2.proven
+        ? `<span style="color:var(--up)" title="win rate > 51% and profit factor > 1">✓</span> `
+        : "";
+      return `<tr><td>${i + 1}</td><td>${badge}${r2.strategy}</td><td>${r2.frame}</td>` +
+        `<td>${r2.trades}</td><td>${r2.win_rate}</td>` +
+        `<td class="${pcls}"><b>${r2.exp_atr}</b></td><td>${fmt(r2.expectancy)}</td>` +
+        `<td>${r2.profit_factor}</td><td class="${pcls}">${fmt(r2.points)}</td>` +
+        `<td>${fmt(r2.max_dd)}</td></tr>`;
+    }).join("");
+  } catch (e) { /* transient */ }
+}
+
+poll(); pollBacktest(); pollSignals(); pollJournal(); pollLeaderboard();
+setInterval(pollLeaderboard, 300000);
 setInterval(pollJournal, 120000);
   });
   document.querySelectorAll(".ind").forEach(b => {
@@ -1028,7 +1071,34 @@ async function pollJournal() {
   } catch (e) { /* transient */ }
 }
 
-poll(); pollBacktest(); pollSignals(); pollJournal();
+async function pollLeaderboard() {
+  try {
+    const r = await fetch("/api/leaderboard" + apiQs());
+    const data = await r.json();
+    const tb = document.querySelector("#lb tbody");
+    if (data.error || !data.rows) {
+      tb.innerHTML = `<tr><td colspan="10" style="color:var(--muted)">leaderboard unavailable</td></tr>`;
+      return;
+    }
+    $("lbnote").textContent =
+      `${data.total_tested} strategy×timeframe combinations tested on ${data.symbol} ` +
+      `(${data.frames.join(", ")}), ${data.cost_pts} pts cost charged per trade. Top 25 shown.`;
+    tb.innerHTML = data.rows.map((r2, i) => {
+      const pcls = r2.points > 0 ? "pos" : r2.points < 0 ? "neg" : "";
+      const badge = r2.proven
+        ? `<span style="color:var(--up)" title="win rate > 51% and profit factor > 1">✓</span> `
+        : "";
+      return `<tr><td>${i + 1}</td><td>${badge}${r2.strategy}</td><td>${r2.frame}</td>` +
+        `<td>${r2.trades}</td><td>${r2.win_rate}</td>` +
+        `<td class="${pcls}"><b>${r2.exp_atr}</b></td><td>${fmt(r2.expectancy)}</td>` +
+        `<td>${r2.profit_factor}</td><td class="${pcls}">${fmt(r2.points)}</td>` +
+        `<td>${fmt(r2.max_dd)}</td></tr>`;
+    }).join("");
+  } catch (e) { /* transient */ }
+}
+
+poll(); pollBacktest(); pollSignals(); pollJournal(); pollLeaderboard();
+setInterval(pollLeaderboard, 300000);
 setInterval(pollJournal, 120000);
 setInterval(poll, 15000);
 setInterval(pollBacktest, 60000);
