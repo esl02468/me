@@ -1,4 +1,4 @@
-"""Vercel serverless function: GET /api/leaderboard[?symbol=&demo=1]."""
+"""Vercel serverless function: GET /api/edge[?symbol=&demo=1]."""
 
 import json
 import os
@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from dashboard import build_leaderboard  # noqa: E402
+from dashboard import build_edge_bar  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):
@@ -17,8 +17,8 @@ class handler(BaseHTTPRequestHandler):
         demo = qs.get("demo", ["0"])[0] in ("1", "true")
         symbol = qs.get("symbol", ["NQ=F"])[0][:24]
         try:
-            body = json.dumps(build_leaderboard(demo=True if demo else None,
-                                                symbol=symbol)).encode()
+            body = json.dumps(build_edge_bar(demo=True if demo else None,
+                                            symbol=symbol)).encode()
             code = 200
         except Exception as e:
             body = json.dumps({"error": f"{type(e).__name__}: {e}"}).encode()

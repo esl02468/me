@@ -114,6 +114,21 @@
   .lvl { display: flex; justify-content: space-between; font-size: 13px;
          padding: 4px 0; color: var(--ink-2); border-bottom: 1px solid var(--grid); }
   .lvl b { font-variant-numeric: tabular-nums; color: var(--ink); }
+
+  /* Edge panel. The verdict leads; the table is the supporting evidence. */
+  .verdict { font-size: 15px; line-height: 1.5; padding: 12px 14px; border-radius: 6px;
+             margin-bottom: 10px; border: 1px solid var(--border); color: var(--ink); }
+  .verdict.fail { background: color-mix(in srgb, var(--down) 9%, transparent);
+                  border-color: color-mix(in srgb, var(--down) 35%, transparent); }
+  .verdict.pass { background: color-mix(in srgb, var(--up) 9%, transparent);
+                  border-color: color-mix(in srgb, var(--up) 35%, transparent); }
+  #edgebar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  #edgebar span { font-size: 11px; color: var(--ink-2); background: var(--page);
+                  border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px;
+                  font-variant-numeric: tabular-nums; }
+  #edgebar b { color: var(--ink); }
+  span.pos { color: var(--up); font-weight: 600; }
+  span.neg { color: var(--down); font-weight: 600; }
   .tfrow { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
   .tfbtn {
     font: 600 11.5px system-ui, sans-serif; color: var(--ink-2);
@@ -169,7 +184,7 @@
       <span style="--c: var(--vwap)">VWAP</span>
       <span style="--c: var(--ema-fast)">EMA 9</span>
       <span style="--c: var(--ema-slow)">EMA 21</span>
-      <span style="color:var(--muted)">levels: color-matched to the table · thick = yours</span>
+      <span style="color:var(--muted)">levels: color-matched to the table</span>
       <span style="color:var(--up)">▲ long signal</span>
       <span style="color:var(--down)">▼ short signal</span>
       <span style="color:var(--muted)">× exit · ○ open</span>
@@ -196,33 +211,44 @@
         Size to your prop account's remaining daily-loss room, not to hope.</div>
     </div>
     <div class="card">
-      <h2>Chart levels</h2>
+      <h2>Chart levels — derived, not hand-drawn</h2>
       <label style="display:flex; gap:6px; align-items:center; font-size:12px; color:var(--ink-2); margin-bottom:8px">
         <input type="checkbox" id="provenOnly" checked>
         hide levels proven wrong today (≤51% of touches held)
       </label>
       <div id="levels"></div>
-      <div id="srcnote">Edit levels.json to change your levels.</div>
+      <div id="srcnote"></div>
     </div>
   </div>
 
   <div class="card full">
-    <h2>Strategy leaderboard — every published setup, every timeframe</h2>
-    <div id="lbnote" style="font-size:12px; color:var(--ink-2); margin-bottom:8px"></div>
+    <h2>Does anything actually have an edge?</h2>
+    <div id="edgeverdict"></div>
+    <div id="edgebar"></div>
     <div style="overflow-x:auto"><table id="lb"><thead><tr>
       <th>#</th><th>Strategy</th><th>Frame</th><th>Trades</th><th>Win %</th>
-      <th>Exp/trade (ATR)</th><th>Exp (pts)</th><th>PF</th><th>Net pts</th><th>Max DD</th>
+      <th>Exp (pts)</th><th>PF</th><th>Sharpe/trade</th><th>DSR</th><th>Verdict</th>
     </tr></thead><tbody></tbody></table></div>
-    <div style="font-size:11px; color:var(--muted); margin-top:8px; line-height:1.5">
-      Ranked by expectancy per trade in ATR units, so timeframes compare fairly (a 1h bar moves
-      further than a 1m bar). Net of costs, minimum 5 trades; ✓ marks win rate &gt; 51% with profit
-      factor &gt; 1. These are the published setups — nobody publishes a genuinely elite private edge,
-      so this measures the public canon honestly on your instrument. One session is not proof:
-      the journal below is where multi-day evidence accumulates.
+    <div style="font-size:11px; color:var(--muted); margin-top:10px; line-height:1.6">
+      <b>How to read this.</b> Every published setup is run on every timeframe, net of
+      0.75 pts friction per round trip. Ranking N candidates and reporting the winner is an
+      <i>order statistic, not an estimate</i> — search enough setups and one of them looks
+      brilliant by luck alone. The <b>DSR</b> (Deflated Sharpe Ratio, Bailey &amp; López de
+      Prado 2014) is the probability a row has a genuinely positive edge <i>after</i>
+      subtracting the best result luck is expected to produce across every combination
+      searched. Below 0.95, nothing has been demonstrated — however good the win rate looks.
+      <br><br>
+      This panel replaced a leaderboard that ranked these same strategies by expectancy and
+      stamped anything above a 51% win rate as “proven”. That procedure cannot fail to
+      produce winners. The harness that killed it is open source:
+      <a href="https://github.com/esl02468/nq-edge-lab" style="color:var(--vwap)">nq-edge-lab</a>.
+      <br><br>
+      One session of intraday data is a small sample, and the feed is not roll-adjusted.
+      Treat this as the state of the evidence today, not a verdict for all time.
     </div>
   </div>
 
-  <div class="card full">
+  <div class="card full" id="journalcard" hidden>
     <h2>Track record — signal journal</h2>
     <table id="journal"><thead><tr>
       <th>Strategy</th><th>Frame</th><th>Symbol</th><th>Days</th><th>Trades</th><th>Win %</th><th>Net pts</th>
@@ -698,8 +724,19 @@ function renderHeader() {
   const t = new Date(snap.ts * 1000).toLocaleTimeString();
   $("meta").textContent = `${snap.source} · updated ${t}` + (snap.stale ? " · STALE (feed hiccup, showing last good)" : "");
   const est = snap.live_estimate;
-  $("est").textContent = est ? `≈ ${fmt(est.price)} live est.` : "";
-  $("est").title = est && est.basis ? `${est.basis} — estimate for context/alerts, not execution` : "";
+  if (est) {
+    // Two numbers that disagree with no explanation read as a bug. Name the
+    // proxy and show the gap, so the reader knows which one to trust and why.
+    const gap = snap.price != null ? est.price - snap.price : null;
+    const gapTxt = gap === null ? "" :
+      ` · ${gap >= 0 ? "+" : "−"}${fmt(Math.abs(gap))} vs quote`;
+    $("est").textContent = `≈ ${fmt(est.price)} ${est.proxy || "proxy"} nowcast${gapTxt}`;
+    $("est").title =
+      `${est.basis || "proxy nowcast"}. The quote above is the last print from the ` +
+      `futures feed, which can lag; this is ${est.proxy || "a proxy"} scaled by its ` +
+      `recent ratio. They disagree when the feed is stale or the proxy has moved ` +
+      `since. Context and alerts only — never execution.`;
+  } else { $("est").textContent = ""; $("est").title = ""; }
 }
 
 function renderBias() {
@@ -737,36 +774,47 @@ function renderLevels() {
             `${lv.label}</span>${badge}<b style="color:${c}">${fmt(lv.price)}</b></div>`;
   }
   if (!scored.length) {
-    html = `<div class="lvl" style="color:var(--muted)">no levels — add yours to levels.json</div>`;
+    html = `<div class="lvl" style="color:var(--muted)">no levels reached yet today</div>`;
   }
   $("levels").innerHTML = html;
   $("srcnote").textContent =
     (provenOnly() && hidden ? `${hidden} hidden (proven ≤51% right today). ` : "") +
-    "right% = today's bounces/touches; untested = not reached yet. Edit levels.json to change your levels.";
+    "Derived each session from the data — prior day high/low/close, floor pivots, week " +
+    "high/low. right% = today's bounces/touches; untested = not reached yet.";
 }
 
 let lastBt = null;
 function renderBacktest(bt) {
   lastBt = bt;
   let reports = bt.reports || [];
-  const total = reports.length;
-  if (provenOnly()) reports = reports.filter(r => r.win_rate > MIN_RIGHT * 100);
+  // Never reorder by win rate. A 100% win rate on one trade is not a result,
+  // and putting it at the top is the exact failure the edge panel above exists
+  // to call out. Rank by net points, and mark thin samples as thin.
+  reports = [...reports].sort((a, b) => b.total_points - a.total_points);
+  const MIN_N = 20;  // below this, one session says nothing either way
+  const thin = reports.filter(r => r.trades < MIN_N).length;
   const note = document.querySelector("#srcnote2");
-  note.textContent = (provenOnly() && total - reports.length
-    ? `${total - reports.length} strategy(ies) hidden: win rate ≤ 51% today. `
-    : "") + "Next-bar-open fills, 1 contract, 0.75 pts/trade cost charged. Analysis only — not trade advice.";
+  note.textContent =
+    `Every published setup on today's session — not filtered, not ranked by win rate. ` +
+    (thin ? `${thin} of ${reports.length} traded fewer than ${MIN_N} times today; ` +
+            `those rows are greyed out because the sample cannot support a conclusion. ` : "") +
+    `Next-bar-open fills, 1 contract, 0.75 pts/trade cost charged. ` +
+    `One session is not evidence of edge — see the panel above. Analysis only, not trade advice.`;
   const rows = reports.map(r => {
-    const pcls = r.total_points > 0 ? "pos" : r.total_points < 0 ? "neg" : "";
-    return `<tr><td>${r.strategy}</td><td>${r.trades}</td><td>${r.win_rate}</td>` +
+    const small = r.trades < MIN_N;
+    const pcls = small ? "" : (r.total_points > 0 ? "pos" : r.total_points < 0 ? "neg" : "");
+    const style = small ? ' style="color:var(--muted)"' : "";
+    const n = small
+      ? `${r.trades} <span title="too few trades to mean anything">·thin</span>`
+      : r.trades;
+    return `<tr${style}><td>${r.strategy}</td><td>${n}</td><td>${r.win_rate}</td>` +
       `<td class="${pcls}">${fmt(r.total_points)}</td>` +
       `<td class="${pcls}">${fmt(r.pnl_nq_usd, 0)}</td>` +
       `<td class="${pcls}">${fmt(r.pnl_mnq_usd, 0)}</td>` +
       `<td>${r.profit_factor}</td><td>${fmt(r.max_drawdown_points)}</td></tr>`;
   }).join("");
   document.querySelector("#bt tbody").innerHTML = rows ||
-    `<tr><td colspan="8" style="color:var(--muted)">${
-      provenOnly() && total ? "no strategy won more than 51% of trades today"
-                            : "not enough candles yet"}</td></tr>`;
+    `<tr><td colspan="8" style="color:var(--muted)">not enough candles yet</td></tr>`;
 }
 
 /* ---------- polling ---------- */
@@ -811,92 +859,6 @@ document.addEventListener("DOMContentLoaded", () => {
     snap = null; sigData = null; chartSel = { tf: chartSel.tf, rb: chartSel.rb, candles: null };
     view = null; alerted.clear(); prevPollPrice = null; lastBiasLabel = null;
     $("price").textContent = "—"; $("meta").textContent = "loading " + SYM + "…";
-    /* ---------- position sizing (client-side, MNQ $2/pt, NQ $20/pt) ---------- */
-function renderSize() {
-  const stop = Math.max(0.25, +$("szStop").value || 0);
-  const risk = Math.max(1, +$("szRisk").value || 0);
-  const perMnq = stop * 2, perNq = stop * 20;
-  const mnq = Math.floor(risk / perMnq), nq = Math.floor(risk / perNq);
-  $("szOut").innerHTML = nq >= 1
-    ? `<b>${nq}× NQ</b> (risks ${fmt(nq * perNq, 0)}) or <b>${mnq}× MNQ</b> (risks ${fmt(mnq * perMnq, 0)})`
-    : mnq >= 1
-      ? `<b>${mnq}× MNQ</b> (risks ${fmt(mnq * perMnq, 0)}) — NQ too big for this risk`
-      : `stop too wide — even 1 MNQ risks ${fmt(perMnq, 0)}`;
-}
-$("szStop").addEventListener("input", renderSize);
-$("szRisk").addEventListener("input", renderSize);
-renderSize();
-
-/* ---------- news guard banner ---------- */
-let newsWarned = 0;
-function renderNews() {
-  const bar = $("newsbar");
-  const n = snap && snap.news;
-  if (!n) { bar.style.display = "none"; return; }
-  if (n.blackout) {
-    bar.style.display = "block";
-    bar.style.color = css("--down");
-    bar.textContent = `⛔ NEWS BLACKOUT: ${n.blackout} — reversal signals unreliable right now; automation holds fire.`;
-  } else if (n.upcoming && n.upcoming.length && n.upcoming[0].minutes_away <= 60) {
-    const e = n.upcoming[0];
-    bar.style.display = "block";
-    bar.style.color = css("--ink-2");
-    bar.textContent = `⚠ ${e.label} in ${Math.round(e.minutes_away)} min — expect volatility; new positions get stopped-out fast around releases.`;
-    if (e.minutes_away <= 10 && Date.now() - newsWarned > 600000) {
-      newsWarned = Date.now();
-      beep([880, 660, 880], 0.15);
-    }
-  } else bar.style.display = "none";
-}
-
-/* ---------- journal (multi-day track record) ---------- */
-async function pollJournal() {
-  try {
-    const r = await fetch("/api/journal" + apiQs({ days: 30 }));
-    const data = await r.json();
-    const tb = document.querySelector("#journal tbody");
-    if (!data.rows || !data.rows.length) {
-      tb.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">journal empty — fills as the server runs day after day</td></tr>`;
-      return;
-    }
-    tb.innerHTML = data.rows.map(r2 => {
-      const pcls = r2.points > 0 ? "pos" : r2.points < 0 ? "neg" : "";
-      return `<tr><td>${r2.strategy}</td><td>${r2.frame}</td><td>${r2.symbol}</td>` +
-        `<td>${r2.days_active}</td><td>${r2.trades}</td><td>${r2.win_rate}</td>` +
-        `<td class="${pcls}">${fmt(r2.points)}</td></tr>`;
-    }).join("");
-  } catch (e) { /* transient */ }
-}
-
-async function pollLeaderboard() {
-  try {
-    const r = await fetch("/api/leaderboard" + apiQs());
-    const data = await r.json();
-    const tb = document.querySelector("#lb tbody");
-    if (data.error || !data.rows) {
-      tb.innerHTML = `<tr><td colspan="10" style="color:var(--muted)">leaderboard unavailable</td></tr>`;
-      return;
-    }
-    $("lbnote").textContent =
-      `${data.total_tested} strategy×timeframe combinations tested on ${data.symbol} ` +
-      `(${data.frames.join(", ")}), ${data.cost_pts} pts cost charged per trade. Top 25 shown.`;
-    tb.innerHTML = data.rows.map((r2, i) => {
-      const pcls = r2.points > 0 ? "pos" : r2.points < 0 ? "neg" : "";
-      const badge = r2.proven
-        ? `<span style="color:var(--up)" title="win rate > 51% and profit factor > 1">✓</span> `
-        : "";
-      return `<tr><td>${i + 1}</td><td>${badge}${r2.strategy}</td><td>${r2.frame}</td>` +
-        `<td>${r2.trades}</td><td>${r2.win_rate}</td>` +
-        `<td class="${pcls}"><b>${r2.exp_atr}</b></td><td>${fmt(r2.expectancy)}</td>` +
-        `<td>${r2.profit_factor}</td><td class="${pcls}">${fmt(r2.points)}</td>` +
-        `<td>${fmt(r2.max_dd)}</td></tr>`;
-    }).join("");
-  } catch (e) { /* transient */ }
-}
-
-poll(); pollBacktest(); pollSignals(); pollJournal(); pollLeaderboard();
-setInterval(pollLeaderboard, 300000);
-setInterval(pollJournal, 120000);
   });
   document.querySelectorAll(".ind").forEach(b => {
     b.classList.toggle("active", indOn(b.dataset.ind));
@@ -1058,10 +1020,14 @@ async function pollJournal() {
     const r = await fetch("/api/journal" + apiQs({ days: 30 }));
     const data = await r.json();
     const tb = document.querySelector("#journal tbody");
+    const card = document.querySelector("#journalcard");
     if (!data.rows || !data.rows.length) {
-      tb.innerHTML = `<tr><td colspan="7" style="color:var(--muted)">journal empty — fills as the server runs day after day</td></tr>`;
+      // The journal accumulates where the server runs 24/7. On a serverless
+      // deployment there is nothing to read, and an empty table reads as broken.
+      if (card) card.hidden = true;
       return;
     }
+    if (card) card.hidden = false;
     tb.innerHTML = data.rows.map(r2 => {
       const pcls = r2.points > 0 ? "pos" : r2.points < 0 ? "neg" : "";
       return `<tr><td>${r2.strategy}</td><td>${r2.frame}</td><td>${r2.symbol}</td>` +
@@ -1071,34 +1037,55 @@ async function pollJournal() {
   } catch (e) { /* transient */ }
 }
 
-async function pollLeaderboard() {
+async function pollEdge() {
   try {
-    const r = await fetch("/api/leaderboard" + apiQs());
+    const r = await fetch("/api/edge" + apiQs());
     const data = await r.json();
     const tb = document.querySelector("#lb tbody");
     if (data.error || !data.rows) {
-      tb.innerHTML = `<tr><td colspan="10" style="color:var(--muted)">leaderboard unavailable</td></tr>`;
+      tb.innerHTML = `<tr><td colspan="10" style="color:var(--muted)">edge report unavailable</td></tr>`;
       return;
     }
-    $("lbnote").textContent =
-      `${data.total_tested} strategy×timeframe combinations tested on ${data.symbol} ` +
-      `(${data.frames.join(", ")}), ${data.cost_pts} pts cost charged per trade. Top 25 shown.`;
-    tb.innerHTML = data.rows.map((r2, i) => {
+
+    // Headline verdict: the honest answer comes first, not buried under a table.
+    const v = $("edgeverdict");
+    const survived = data.survivors;
+    v.className = survived ? "verdict pass" : "verdict fail";
+    v.innerHTML = survived
+      ? `<b>${survived}</b> of ${data.total_tested} cleared the bar ` +
+        `(DSR &ge; ${data.dsr_threshold}). Worth a closer look — and worth re-testing out of sample.`
+      : `<b>No.</b> ${data.total_tested} strategy×timeframe combinations tested on ` +
+        `${data.symbol} today. <b>None</b> clears DSR ${data.dsr_threshold}. ` +
+        `That is the expected result, and it is the point of showing it.`;
+
+    // The bar itself, in the same per-trade units as the Sharpe column.
+    $("edgebar").innerHTML =
+      `<span>${data.n_trials} trials searched</span>` +
+      (data.luck_sharpe !== null
+        ? `<span>luck's expected best Sharpe &asymp; <b>${data.luck_sharpe}</b> ` +
+          `at ${data.median_trades} trades</span>` : "") +
+      `<span>friction <b>${data.cost_pts} pts</b> per round trip</span>` +
+      `<span>bar to clear: <b>DSR ${data.dsr_threshold}</b></span>`;
+
+    tb.innerHTML = data.rows.map((r2, i2) => {
       const pcls = r2.points > 0 ? "pos" : r2.points < 0 ? "neg" : "";
-      const badge = r2.proven
-        ? `<span style="color:var(--up)" title="win rate > 51% and profit factor > 1">✓</span> `
-        : "";
-      return `<tr><td>${i + 1}</td><td>${badge}${r2.strategy}</td><td>${r2.frame}</td>` +
+      const dsr = r2.dsr === null ? "—" : r2.dsr.toFixed(3);
+      // Colour tracks the DSR, never the win rate — the win rate is the trap.
+      const dcls = r2.clears ? "pos" : "neg";
+      const verdict = r2.clears
+        ? `<span class="pos">clears</span>`
+        : `<span style="color:var(--muted)">indistinguishable from luck</span>`;
+      return `<tr><td>${i2 + 1}</td><td>${r2.strategy}</td><td>${r2.frame}</td>` +
         `<td>${r2.trades}</td><td>${r2.win_rate}</td>` +
-        `<td class="${pcls}"><b>${r2.exp_atr}</b></td><td>${fmt(r2.expectancy)}</td>` +
-        `<td>${r2.profit_factor}</td><td class="${pcls}">${fmt(r2.points)}</td>` +
-        `<td>${fmt(r2.max_dd)}</td></tr>`;
+        `<td class="${pcls}">${fmt(r2.expectancy)}</td>` +
+        `<td>${r2.profit_factor}</td><td>${r2.sharpe}</td>` +
+        `<td class="${dcls}"><b>${dsr}</b></td><td>${verdict}</td></tr>`;
     }).join("");
   } catch (e) { /* transient */ }
 }
 
-poll(); pollBacktest(); pollSignals(); pollJournal(); pollLeaderboard();
-setInterval(pollLeaderboard, 300000);
+poll(); pollBacktest(); pollSignals(); pollJournal(); pollEdge();
+setInterval(pollEdge, 300000);
 setInterval(pollJournal, 120000);
 setInterval(poll, 15000);
 setInterval(pollBacktest, 60000);
@@ -1107,7 +1094,6 @@ window.addEventListener("resize", drawChart);
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawChart);
 $("provenOnly").addEventListener("change", () => {
   if (snap) { renderLevels(); drawChart(); }
-  if (lastBt) renderBacktest(lastBt);
 });
 </script>
 </body>
