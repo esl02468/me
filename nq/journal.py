@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
+from nq.console import use_utf8_stdout
 
 DEFAULT_PATH = os.environ.get(
     "NQ_JOURNAL_PATH",
@@ -112,6 +113,7 @@ def stats(days: int = 30, symbol: str | None = None) -> list[dict]:
 
 
 def main() -> int:
+    use_utf8_stdout()
     import argparse
 
     ap = argparse.ArgumentParser(description=__doc__)
