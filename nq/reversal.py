@@ -100,6 +100,50 @@ def _rating(score: float) -> str:
     return "LOW"
 
 
+def _merge_coincident(levels: list[dict]) -> list[dict]:
+    """Collapse levels that sit on the same price into a single entry.
+
+    The prior day's low and the week's low are routinely the same print. Scored
+    separately they occupy two rows and two ranks, which reads as two
+    independent pieces of evidence for one line on the chart. Merging keeps the
+    labels — "PDL / Week low" is more informative than either alone.
+
+    A merged level counts as user-drawn if any of its sources was, so a hand
+    placed level never loses its priority by colliding with a computed one.
+    """
+    groups: dict[float, dict] = {}
+    order: list[float] = []
+    for lv in levels:
+        key = round(float(lv["price"]), 2)
+        if key not in groups:
+            groups[key] = {
+                "price": key,
+                "labels": [str(lv.get("label", ""))],
+                "kind": str(lv.get("kind", "")),
+                "user": lv.get("kind") != "auto",
+            }
+            order.append(key)
+            continue
+        g = groups[key]
+        label = str(lv.get("label", ""))
+        if label and label not in g["labels"]:
+            g["labels"].append(label)
+        if lv.get("kind") != "auto":
+            # A user level outranks a computed one at the same price.
+            g["user"] = True
+            g["kind"] = str(lv.get("kind", ""))
+
+    merged = []
+    for key in order:
+        g = groups[key]
+        merged.append({
+            "price": g["price"],
+            "label": " / ".join(l for l in g["labels"] if l),
+            "kind": g["kind"] if g["user"] else "auto",
+        })
+    return merged
+
+
 def rank_levels(
     session: Session,
     levels: list[dict],
@@ -114,6 +158,8 @@ def rank_levels(
     price = session.last
     a = atr(candles) or 5.0
     tol = max(TOL_ATR * a, 1.0)
+
+    levels = _merge_coincident(levels)
 
     out: list[LevelScore] = []
     prices = [float(l["price"]) for l in levels]
@@ -141,7 +187,10 @@ def rank_levels(
             empirical = UNTESTED_EMPIRICAL
 
         # --- structural components ---
-        prior = USER_PRIOR if user else KIND_PRIOR.get(label, 8)
+        # A merged label ("PDL / Week low") carries several priors; the
+        # strongest one wins, so merging never demotes a level.
+        prior = USER_PRIOR if user else max(
+            (KIND_PRIOR.get(part.strip(), 8) for part in label.split("/")), default=8)
         confluence = min(16.0, 8.0 * sum(
             1 for q in prices if q != p and abs(q - p) <= 0.5 * a
         ))

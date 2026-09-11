@@ -1,9 +1,4 @@
 {
-  "levels": [
-    {"price": 23600, "label": "Weekly high", "kind": "resistance"},
-    {"price": 23500, "label": "Overnight high", "kind": "resistance"},
-    {"price": 23450, "label": "Pivot", "kind": "pivot"},
-    {"price": 23380, "label": "Overnight low", "kind": "support"},
-    {"price": 23300, "label": "Weekly low", "kind": "support"}
-  ]
+  "_comment": "Manual levels overlay the derived ones. Empty by default: the deployed site computes its levels from the session data (prior day high/low/close, floor pivots, week high/low) so they can never go stale. A hand-maintained list here went six thousand points out of date. Local and VPS runs can still add levels via the dashboard editor; the cloud deployment is read-only.",
+  "levels": []
 }
