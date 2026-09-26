@@ -81,7 +81,7 @@
   h2 { font-size: 12px; font-weight: 600; color: var(--muted);
        text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
   #chartwrap { position: relative; }
-  canvas { width: 100%; height: 440px; display: block; cursor: crosshair; touch-action: pan-y; }
+  canvas { width: 100%; height: 440px; display: block; cursor: crosshair; touch-action: none; }
   #tooltip {
     position: absolute; pointer-events: none; display: none;
     background: var(--surface-1); border: 1px solid var(--border);
@@ -154,7 +154,7 @@
   <div class="card full" id="newsbar" style="display:none; padding:8px 16px; font-size:13px; font-weight:600"></div>
 
   <div class="card" id="chartcard">
-    <h2>Chart <span style="font-weight:400; text-transform:none; letter-spacing:0">— scroll to zoom · drag to pan · double-click to reset</span></h2>
+    <h2>Chart <span style="font-weight:400; text-transform:none; letter-spacing:0">— scroll or pinch to zoom · drag to pan · double-click to reset</span></h2>
     <div class="tfrow" id="tfrow">
       <button class="tfbtn active" data-tf="1m">1m</button>
       <button class="tfbtn" data-tf="5m">5m</button>
@@ -230,13 +230,15 @@
       <th>Exp (pts)</th><th>PF</th><th>Sharpe/trade</th><th>DSR</th><th>Verdict</th>
     </tr></thead><tbody></tbody></table></div>
     <div style="font-size:11px; color:var(--muted); margin-top:10px; line-height:1.6">
-      <b>How to read this.</b> Every published setup is run on every timeframe, net of
-      0.75 pts friction per round trip. Ranking N candidates and reporting the winner is an
+      <b>How to read this.</b> Every published setup is run on every timeframe (RTH bars
+      once the cash session is under way), net of 0.75 pts friction per round trip. Ranking N candidates and reporting the winner is an
       <i>order statistic, not an estimate</i> — search enough setups and one of them looks
       brilliant by luck alone. The <b>DSR</b> (Deflated Sharpe Ratio, Bailey &amp; López de
       Prado 2014) is the probability a row has a genuinely positive edge <i>after</i>
       subtracting the best result luck is expected to produce across every combination
       searched. Below 0.95, nothing has been demonstrated — however good the win rate looks.
+      It is an asymptotic statistic, so rows with fewer than 30 trades get no verdict at all:
+      a 5-for-5 streak is not evidence, and an earlier version of this panel said it was.
       <br><br>
       This panel replaced a leaderboard that ranked these same strategies by expectancy and
       stamped anything above a 51% win rate as “proven”. That procedure cannot fail to
@@ -298,13 +300,54 @@ function ema(vals, p) {
   for (let i = 1; i < vals.length; i++) out.push(vals[i] * k + out[out.length - 1] * (1 - k));
   return out;
 }
+/* Eastern-time helpers: the session structure (18:00 Globex open, 09:30
+   cash open) is defined in New York time whatever the viewer's clock says. */
+const ET_FMT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York", hourCycle: "h23",
+  year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+});
+const etCache = new Map();
+function etParts(ts) {
+  let p = etCache.get(ts);
+  if (p) return p;
+  const o = {};
+  for (const { type, value } of ET_FMT.formatToParts(new Date(ts * 1000))) o[type] = value;
+  p = { date: `${o.year}-${o.month}-${o.day}`, mod: (parseInt(o.hour, 10) % 24) * 60 + parseInt(o.minute, 10) };
+  if (etCache.size > 200000) etCache.clear();
+  etCache.set(ts, p);
+  return p;
+}
+const RTH_OPEN_MOD = 9 * 60 + 30, GLOBEX_OPEN_MOD = 18 * 60;
+function sessionMode() { return (snap && snap.session && snap.session.mode) || "rth"; }
+// Indices where a new VWAP anchor starts: the cash open (RTH mode) or the
+// Globex open (globex mode) of each day in the series. Daily bars never reset.
+function sessionAnchors(cs) {
+  const anchors = new Set([0]);
+  if (!cs.length || chartSel.tf === "1d") return anchors;
+  const A = sessionMode() === "globex" ? GLOBEX_OPEN_MOD : RTH_OPEN_MOD;
+  let prev = etParts(cs[0].t);
+  for (let i = 1; i < cs.length; i++) {
+    const cur = etParts(cs[i].t);
+    const crossed = cur.date !== prev.date ? cur.mod >= A : (prev.mod < A && cur.mod >= A);
+    if (crossed) anchors.add(i);
+    prev = cur;
+  }
+  return anchors;
+}
+let vwapCache = { src: null, mode: null, tf: null, series: null, anchors: null };
 function vwapSeries(cs) {
+  if (vwapCache.src === cs && vwapCache.mode === sessionMode() && vwapCache.tf === chartSel.tf
+      && vwapCache.series.length === cs.length) return vwapCache.series;
+  const anchors = sessionAnchors(cs);
   let pv = 0, vv = 0;
-  return cs.map(c => {
+  const series = cs.map((c, i) => {
+    if (anchors.has(i)) { pv = 0; vv = 0; }
     const v = c.v || 1;
     pv += ((c.h + c.l + c.c) / 3) * v; vv += v;
     return pv / vv;
   });
+  vwapCache = { src: cs, mode: sessionMode(), tf: chartSel.tf, series, anchors };
+  return series;
 }
 
 /* ---------- chart: zoom (wheel) + pan (drag) + crosshair ---------- */
@@ -463,6 +506,23 @@ function drawChart() {
       ctx.font = "11px system-ui, sans-serif";
     }
     ctx.globalAlpha = 1;
+  }
+
+  // session boundaries: a dotted rule where each VWAP anchor (cash open, or
+  // Globex open in globex mode) falls inside the view
+  {
+    vwapSeries(all);
+    const label = sessionMode() === "globex" ? "Globex" : "RTH";
+    ctx.strokeStyle = css("--baseline"); ctx.fillStyle = css("--muted");
+    ctx.setLineDash([2, 4]); ctx.lineWidth = 1;
+    ctx.font = "10px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+    for (const a of vwapCache.anchors || []) {
+      if (a <= 0 || a < start || a >= end) continue;
+      const ax = x(a - start) - (plotW / cs.length) / 2;
+      ctx.beginPath(); ctx.moveTo(ax, PADT); ctx.lineTo(ax, H - PADB); ctx.stroke();
+      ctx.fillText(label, ax + 3, PADT + 2);
+    }
+    ctx.setLineDash([]);
   }
 
   // candles — 2px surface gap between bars
@@ -664,6 +724,51 @@ window.addEventListener("mouseup", () => {
 });
 chartEl.addEventListener("dblclick", () => { view = null; follow = true; updateFollowBtn(); drawChart(); });
 
+/* touch: one finger pans, two fingers pinch-zoom around the midpoint */
+let touch = null;
+function touchInfo(e) {
+  const rect = chartEl.getBoundingClientRect();
+  const pts = [...e.touches].map(t => t.clientX - rect.left);
+  return { rect, pts, mid: pts.reduce((a, b) => a + b, 0) / pts.length,
+           dist: pts.length > 1 ? Math.abs(pts[0] - pts[1]) : 0 };
+}
+chartEl.addEventListener("touchstart", e => {
+  if (!snap || !chartData().length) return;
+  const { rect, pts, mid, dist } = touchInfo(e);
+  const { start, end } = viewRange();
+  const plotW = rect.width - PADL - PADR;
+  const frac = Math.max(0, Math.min(1, (mid - PADL) / plotW));
+  touch = { start0: start, end0: end, mid0: mid, dist0: dist, anchor: start + frac * (end - start), frac };
+  if (pts.length === 1) {
+    const ty = e.touches[0].clientY - rect.top;
+    hoverPos = { x: pts[0], y: ty };
+    drawChart();
+  }
+}, { passive: true });
+chartEl.addEventListener("touchmove", e => {
+  if (!touch || !snap || !chartData().length) return;
+  e.preventDefault();
+  const { rect, pts, mid, dist } = touchInfo(e);
+  const plotW = rect.width - PADL - PADR;
+  const n = chartData().length;
+  const width0 = touch.end0 - touch.start0;
+  let width = width0, ns;
+  if (pts.length >= 2 && touch.dist0 > 0) {
+    width = Math.max(MIN_BARS, Math.min(n, Math.round(width0 * touch.dist0 / Math.max(dist, 1))));
+    ns = Math.round(touch.anchor - touch.frac * width);
+  } else {
+    const dBars = Math.round((mid - touch.mid0) / (plotW / width0));
+    ns = touch.start0 - dBars;
+  }
+  ns = Math.max(0, Math.min(ns, n - width));
+  view = width >= n ? null : { start: ns, end: ns + width };
+  follow = !view || view.end >= n;
+  updateFollowBtn();
+  hoverPos = null; $("tooltip").style.display = "none";
+  drawChart();
+}, { passive: false });
+window.addEventListener("touchend", () => { touch = null; }, { passive: true });
+
 chartEl.addEventListener("mousemove", e => {
   if (!snap || !chartData().length) return;
   const rect = chartEl.getBoundingClientRect();
@@ -722,7 +827,15 @@ function renderHeader() {
     chg.className = d >= 0 ? "up" : "down";
   } else chg.textContent = "";
   const t = new Date(snap.ts * 1000).toLocaleTimeString();
-  $("meta").textContent = `${snap.source} · updated ${t}` + (snap.stale ? " · STALE (feed hiccup, showing last good)" : "");
+  const ss = snap.session || {};
+  const scope = ss.scope === "rth" ? "RTH 09:30–16:00 ET"
+              : ss.scope === "globex" ? (ss.mode === "rth" ? "Globex (pre-open)" : "Globex 18:00–17:00 ET")
+              : ss.scope || "";
+  const scopeTxt = scope ? ` · analysis on ${scope}` + (ss.analysis_bars ? ` (${ss.analysis_bars} bars)` : "") : "";
+  $("meta").textContent = `${snap.source} · updated ${t}${scopeTxt}` + (snap.stale ? " · STALE (feed hiccup, showing last good)" : "");
+  $("meta").title = ss.mode === "rth"
+    ? "Bias, levels, backtests and signals run on the cash session once it has an opening range; before 09:45 ET they run on the whole Globex day. NQ_SESSION=globex on the server changes this."
+    : "Bias, levels, backtests and signals run on the whole Globex day (NQ_SESSION=globex).";
   const est = snap.live_estimate;
   if (est) {
     // Two numbers that disagree with no explanation read as a bug. Name the
@@ -794,8 +907,11 @@ function renderBacktest(bt) {
   const MIN_N = 20;  // below this, one session says nothing either way
   const thin = reports.filter(r => r.trades < MIN_N).length;
   const note = document.querySelector("#srcnote2");
+  const bs = bt.session || {};
+  const where = bs.scope === "rth" ? "today's RTH session (09:30–16:00 ET)"
+              : bs.scope === "globex" ? "today's Globex session" : "today's session";
   note.textContent =
-    `Every published setup on today's session — not filtered, not ranked by win rate. ` +
+    `Every published setup on ${where}, ${bt.candles || 0} bars — not filtered, not ranked by win rate. ` +
     (thin ? `${thin} of ${reports.length} traded fewer than ${MIN_N} times today; ` +
             `those rows are greyed out because the sample cannot support a conclusion. ` : "") +
     `Next-bar-open fills, 1 contract, 0.75 pts/trade cost charged. ` +
@@ -1050,12 +1166,14 @@ async function pollEdge() {
     // Headline verdict: the honest answer comes first, not buried under a table.
     const v = $("edgeverdict");
     const survived = data.survivors;
+    const minN = data.dsr_min_trades || 30;
+    const judged = data.with_verdict != null ? data.with_verdict : data.total_tested;
     v.className = survived ? "verdict pass" : "verdict fail";
     v.innerHTML = survived
-      ? `<b>${survived}</b> of ${data.total_tested} cleared the bar ` +
-        `(DSR &ge; ${data.dsr_threshold}). Worth a closer look — and worth re-testing out of sample.`
+      ? `<b>${survived}</b> of ${judged} with enough trades cleared the bar ` +
+        `(DSR &ge; ${data.dsr_threshold}, n &ge; ${minN}). Worth a closer look — and worth re-testing out of sample.`
       : `<b>No.</b> ${data.total_tested} strategy×timeframe combinations tested on ` +
-        `${data.symbol} today. <b>None</b> clears DSR ${data.dsr_threshold}. ` +
+        `${data.symbol} today, ${judged} with the ${minN}+ trades a verdict needs. <b>None</b> clears DSR ${data.dsr_threshold}. ` +
         `That is the expected result, and it is the point of showing it.`;
 
     // The bar itself, in the same per-trade units as the Sharpe column.
@@ -1065,16 +1183,19 @@ async function pollEdge() {
         ? `<span>luck's expected best Sharpe &asymp; <b>${data.luck_sharpe}</b> ` +
           `at ${data.median_trades} trades</span>` : "") +
       `<span>friction <b>${data.cost_pts} pts</b> per round trip</span>` +
-      `<span>bar to clear: <b>DSR ${data.dsr_threshold}</b></span>`;
+      `<span>bar to clear: <b>DSR ${data.dsr_threshold}</b> at <b>n &ge; ${minN}</b></span>`;
 
     tb.innerHTML = data.rows.map((r2, i2) => {
       const pcls = r2.points > 0 ? "pos" : r2.points < 0 ? "neg" : "";
       const dsr = r2.dsr === null ? "—" : r2.dsr.toFixed(3);
       // Colour tracks the DSR, never the win rate — the win rate is the trap.
-      const dcls = r2.clears ? "pos" : "neg";
-      const verdict = r2.clears
-        ? `<span class="pos">clears</span>`
-        : `<span style="color:var(--muted)">indistinguishable from luck</span>`;
+      const enough = r2.enough !== false;
+      const dcls = !enough ? "" : r2.clears ? "pos" : "neg";
+      const verdict = !enough
+        ? `<span style="color:var(--muted)" title="the deflated Sharpe is an asymptotic statistic; ${r2.trades} trades cannot support a verdict either way">too few trades (n &lt; ${minN})</span>`
+        : r2.clears
+          ? `<span class="pos">clears</span>`
+          : `<span style="color:var(--muted)">indistinguishable from luck</span>`;
       return `<tr><td>${i2 + 1}</td><td>${r2.strategy}</td><td>${r2.frame}</td>` +
         `<td>${r2.trades}</td><td>${r2.win_rate}</td>` +
         `<td class="${pcls}">${fmt(r2.expectancy)}</td>` +

@@ -400,7 +400,8 @@ STRATEGIES = {
 
 
 def session_level_prices(session: Session) -> list[float]:
-    """Auto levels + the user's levels.json, as plain prices."""
+    """Auto levels + the user's levels.json, as plain prices. Prior-day and
+    pivot levels come first so callers can slice the structural ones."""
     from .levels import compute_auto_levels, load_levels
 
     prices = [d["price"] for d in compute_auto_levels(session)]
@@ -409,13 +410,17 @@ def session_level_prices(session: Session) -> list[float]:
 
 
 def run_all(session: Session) -> list[Report]:
+    """Every strategy on the session's analysis candles (RTH once the cash
+    session is under way, the Globex day before that — see nq.data), so
+    the opening-range, gap and initial-balance setups key off 09:30 ET."""
     from .strategies import extended_strategies
 
-    reports = [fn(session.candles) for fn in STRATEGIES.values()]
+    candles = session.analysis_candles
+    reports = [fn(candles) for fn in STRATEGIES.values()]
     levels = session_level_prices(session)
-    reports.append(backtest_level_bounce(session.candles, levels))
+    reports.append(backtest_level_bounce(candles, levels))
     pivots = levels[:9] if levels else []  # PDH/PDL/close/mid + floor pivots
-    reports.extend(extended_strategies(session.candles, session.prev_close, pivots))
+    reports.extend(extended_strategies(candles, session.prev_close, pivots))
     # Most trades first among equals; the >51% filter does the real ranking.
     reports.sort(key=lambda r: (r.win_rate, len(r.closed)), reverse=True)
     return reports

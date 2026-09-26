@@ -42,10 +42,11 @@ def main() -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    if len(sess.candles) < 30:
+    candles = sess.analysis_candles
+    if len(candles) < 30:
         print(
-            f"error: only {len(sess.candles)} candles available from source "
-            f"'{sess.source}' — not enough to backtest.",
+            f"error: only {len(candles)} candles available from source "
+            f"'{sess.source}' ({sess.analysis_scope}) — not enough to backtest.",
             file=sys.stderr,
         )
         return 1
@@ -63,7 +64,8 @@ def main() -> int:
                 {
                     "symbol": sess.symbol,
                     "source": sess.source,
-                    "candles": len(sess.candles),
+                    "session": sess.analysis_scope,
+                    "candles": len(candles),
                     "reports": [
                         {**r.summary(), "trade_log": [
                             {
@@ -85,9 +87,10 @@ def main() -> int:
         )
         return 0
 
+    scope = {"rth": "RTH 09:30-16:00 ET", "globex": "Globex session"}.get(sess.analysis_scope, sess.analysis_scope)
     print(
         f"\n  Strategy Analyzer — {sess.symbol}  "
-        f"({len(sess.candles)} x 1m candles, source: {sess.source})\n"
+        f"({len(candles)} x 1m candles, {scope}, source: {sess.source})\n"
     )
     header = f"  {'strategy':<28}{'trades':>7}{'win %':>8}{'points':>9}{'NQ $':>10}{'MNQ $':>9}{'PF':>7}{'maxDD':>8}"
     print(header)

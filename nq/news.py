@@ -12,8 +12,9 @@ Event sources:
 
 Windows default to 5 minutes before through 10 minutes after the release
 (NQ_NEWS_BEFORE_MIN / NQ_NEWS_AFTER_MIN override). All comparisons in UTC;
-event times carry their own offsets. This is a guard, not a calendar feed —
-keep news.json current from your economic calendar of choice.
+event times carry their own offsets, and the NFP rule uses real Eastern
+time (nq.clock) rather than a month-based DST guess. This is a guard, not
+a calendar feed — keep news.json current from your economic calendar.
 """
 
 from __future__ import annotations
@@ -22,19 +23,16 @@ import calendar as _cal
 import json
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+
+from . import clock
 
 NEWS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "news.json")
 BEFORE_MIN = float(os.environ.get("NQ_NEWS_BEFORE_MIN", "5"))
 AFTER_MIN = float(os.environ.get("NQ_NEWS_AFTER_MIN", "10"))
 
-# US Eastern offset by month (approximation: EDT Mar-Oct, EST otherwise).
-def _et_offset(month: int) -> int:
-    return -4 if 3 < month < 11 else -5
-
-
 def _nfp_events(now: datetime) -> list[tuple[datetime, str]]:
-    """First Friday of this and next month, 08:30 ET."""
+    """First Friday of this and next month, 08:30 ET (exact DST)."""
     out = []
     for add in (0, 1):
         year = now.year + (now.month + add - 1) // 12
@@ -43,9 +41,7 @@ def _nfp_events(now: datetime) -> list[tuple[datetime, str]]:
             d for d in range(1, 8)
             if _cal.weekday(year, month, d) == _cal.FRIDAY
         )
-        dt = datetime(year, month, first_friday, 8, 30,
-                      tzinfo=timezone(timedelta(hours=_et_offset(month))))
-        out.append((dt, "NFP (jobs report)"))
+        out.append((clock.et_datetime(year, month, first_friday, 8, 30), "NFP (jobs report)"))
     return out
 
 

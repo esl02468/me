@@ -46,25 +46,36 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def latest_signal(session, strategy: str):
-    """Run the named strategy; return its trade opened on the LAST bar, if any."""
+FRESH_SECONDS = 180  # a signal older than this is history, not an order
+
+
+def latest_signal(session, strategy: str, now: float | None = None):
+    """Run the named strategy on the session's analysis candles (RTH once
+    the cash open is under way); return its trade opened on the LAST bar,
+    if that bar is recent by the wall clock. After the close the last RTH
+    bar stays the last bar all evening — the wall-clock check is what stops
+    a 15:59 signal being sent at 19:00."""
+    candles = session.analysis_candles
     if strategy in STRATEGIES:
-        report = STRATEGIES[strategy](session.candles)
+        report = STRATEGIES[strategy](candles)
     elif strategy == "level_bounce":
-        report = backtest_level_bounce(session.candles, session_level_prices(session))
+        report = backtest_level_bounce(candles, session_level_prices(session))
     else:
         match = [r for r in extended_strategies(
-            session.candles, session.prev_close, session_level_prices(session)[:9])
+            candles, session.prev_close, session_level_prices(session)[:9])
             if r.strategy.split("(")[0] == strategy]
         if not match:
             raise SystemExit(f"unknown strategy {strategy!r}")
         report = match[0]
-    if not report.trades:
+    if not report.trades or not candles:
         return None
     last = report.trades[-1]
-    last_ts = session.candles[-1].ts
-    # Fresh = entered on the most recent bar and still open.
-    if last.exit is None and last.entry_ts >= last_ts - 90:
+    last_ts = candles[-1].ts
+    now = time.time() if now is None else now
+    # Fresh = entered on the most recent bar, still open, and that bar is
+    # actually the live one.
+    if (last.exit is None and last.entry_ts >= last_ts - 90
+            and now - last.entry_ts <= FRESH_SECONDS):
         return last
     return None
 
@@ -104,6 +115,7 @@ def main() -> int:
     log("reminder: check each prop firm's automation & copy-trading policy before enabling it there.")
 
     last_entry_ts = 0
+    flattened: set[str] = set()  # accounts already flattened this cutoff
     while True:
         try:
             sess = get_session(demo=True if args.demo_data else None)
@@ -136,14 +148,20 @@ def main() -> int:
                             log(f"  {name}: ORDER FAILED — {e}")
             for acc in cfg.get("accounts", []):
                 name = acc["name"]
-                if managers[name].must_flatten():
-                    if paper:
-                        log(f"  {name}: would flatten ({managers[name].state.halted or 'flatten_by'})")
-                    else:
-                        try:
-                            client.flatten(acc["account_id"], symbol)
-                        except TradovateError as e:
-                            log(f"  {name}: flatten failed — {e}")
+                if not managers[name].must_flatten():
+                    flattened.discard(name)
+                    continue
+                if name in flattened:
+                    continue  # once per cutoff, not once per poll
+                if paper:
+                    log(f"  {name}: would flatten ({managers[name].state.halted or 'flatten_by'})")
+                    flattened.add(name)
+                else:
+                    try:
+                        client.flatten(acc["account_id"], symbol)
+                        flattened.add(name)
+                    except TradovateError as e:
+                        log(f"  {name}: flatten failed — {e}")
         except RuntimeError as e:
             log(f"data error: {e}")
         except KeyboardInterrupt:

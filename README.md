@@ -23,6 +23,35 @@ python3 dashboard.py                 # → http://localhost:8787
 No network where you're running it? Every command accepts `--demo`
 (or `NQ_DEMO=1`) to run on a realistic synthetic session.
 
+Tests are plain `unittest`, nothing to install:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+## Sessions: RTH vs. Globex
+
+CME index futures trade a Globex day from 18:00 ET to 17:00 ET the next
+afternoon; the cash-hours part (RTH) is 09:30–16:00 ET. The free 1-minute
+feed hands back the *whole* Globex day, so a naive "first 15 minutes" is
+the overnight open at 18:00, "the gap" is always zero, and "midday" lands
+at 3 a.m. Everything here is session-aware:
+
+- The **chart** shows the full Globex day, with a dotted rule at the cash
+  open and VWAP re-anchored there (and at each cash open on multi-day
+  frames).
+- **Bias, levels, backtests, signals and the edge report** run on the RTH
+  bars once the cash session has printed an opening range (15 bars). Before
+  09:45 ET they run on the Globex day so overnight traders still get a
+  reading; the header says which (`analysis on RTH 09:30–16:00 ET`).
+- Auto levels gain **ON high / ON low** (the overnight range) once RTH is
+  under way; the opening range and VWAP are the cash session's.
+- Prior-day high/low/close are picked by session date, so the Sunday
+  evening open and the weekend read Friday as "yesterday".
+- `NQ_SESSION=globex` on the server switches every consumer to the whole
+  day. All time-of-day logic uses real US Eastern/Central time with the
+  exact DST rule (`nq/clock.py`), on any platform, with no packages.
+
 ## Run it on a Windows VPS (24/7, live, no login wall)
 
 One elevated PowerShell on the VPS:
@@ -57,8 +86,10 @@ pushing.
 ## Data sources
 
 Live data comes from Yahoo Finance's public chart API (`NQ=F`, 1-minute
-candles, ~15 min delayed for CME futures) with a Stooq last-price fallback.
-No API keys needed. The dashboard server proxies the feed so the browser
+candles, ~15 min delayed for CME futures; two days are requested and sliced
+to the current Globex day), with one polite retry on rate limits, both
+Yahoo hosts tried, a Stooq daily-history fallback for prior-day levels and
+a Stooq last-price fallback when Yahoo is out entirely. No API keys needed. The dashboard server proxies the feed so the browser
 never deals with CORS, and caches upstream calls (10 s) so polling stays
 polite.
 
@@ -86,7 +117,7 @@ STRONG BEARISH → STRONG BULLISH:
 |---|---|
 | VWAP | price above session VWAP |
 | EMA 9/21 | fast EMA above slow |
-| Opening range | price above the first 15 minutes' high |
+| Opening range | price above the cash session's first 15 minutes' high |
 | Prev close | trading above yesterday's close |
 | Momentum | last 10 minutes' net move exceeds ATR |
 
@@ -160,9 +191,11 @@ alerts; never for execution.
 
 `trader/` contains the execution scaffold: a Tradovate REST client
 (demo environment by default), per-account prop-firm risk rules
-(max contracts, daily loss halt, trailing drawdown, flatten-by time,
-automation gate), and a trade copier that fans one signal out to every
-account whose rules allow it.
+(max contracts, daily loss halt, trailing drawdown, flatten-by time in
+**Chicago time** whatever the VPS clock says, automation gate), and a trade
+copier that fans one signal out to every account whose rules allow it.
+Signals are only acted on when the bar that produced them is live by the
+wall clock, so the last bar of the day cannot fire again all evening.
 
 ```bash
 cp trader/config.example.json trader/config.json   # fill in accounts/rules
@@ -245,12 +278,17 @@ Use `--all` (CLI) or untick the checkbox (dashboard) to see everything;
 
 ## Strategy leaderboard
 
-`/api/leaderboard` and the dashboard's leaderboard card rank **every**
-published strategy across 1m/5m/15m/1h on the selected instrument —
-typically 80+ strategy×timeframe combinations — by **expectancy per trade
-in ATR units**, so timeframes compare fairly (raw points would just rank
-bar size). Net of costs, minimum 5 trades, ✓ marking win rate > 51% with
-profit factor > 1.
+`/api/edge` and the dashboard's edge panel run **every** published
+strategy across 1m/5m/15m/1h on the selected instrument — typically 80+
+strategy×timeframe combinations — and report each one's per-trade Sharpe
+together with its **Deflated Sharpe Ratio** (Bailey & López de Prado,
+2014): the probability the row has a real edge *after* subtracting the best
+result luck is expected to produce across every combination searched. A row
+clears at DSR ≥ 0.95 — and only with **30 or more closed trades**. The
+statistic is asymptotic; five trades cannot estimate the skew and kurtosis
+it depends on, and a 5-for-5 streak used to score 1.0 and "clear". Rows
+below the sample floor are shown with "too few trades" instead of a
+verdict. The expected result is that nothing clears, and the panel says so.
 
 There is no public register of "the world's best" trading strategies: the
 genuinely elite ones are never published. What this ranks is the public
@@ -276,8 +314,6 @@ results are comparable; the >51% filter surfaces the ones earning trust
 today. Add a strategy in ~5 lines in `nq/strategies.py`.
 
 PnL is reported in points and dollars for both NQ ($20/pt) and MNQ ($2/pt).
-Add a strategy by writing a function in `nq/backtest.py` and registering it
-in `STRATEGIES`.
 
 **This is an analysis tool, not trade advice.** Fills ignore slippage and
 commissions; delayed data means live readings lag the tape.
@@ -285,12 +321,24 @@ commissions; delayed data means live readings lag the tape.
 ## Layout
 
 ```
-nq/data.py       market data (Yahoo → Stooq → demo generator)
-nq/bias.py       bias engine (VWAP, EMA, ATR, opening range)
-nq/backtest.py   strategies + reports
-nq/levels.py     levels.json load/save
-fetch_nq.py      terminal fetcher/bias CLI
-analyze.py       terminal backtest CLI
-dashboard.py     stdlib HTTP server + JSON API
-static/dashboard.html   the dashboard UI (self-contained)
+nq/clock.py       US Eastern/Central time, exact DST, RTH/Globex boundaries
+nq/data.py        market data (Yahoo → Stooq → demo generator), Session model
+nq/bias.py        bias engine (VWAP, EMA, ATR, opening range)
+nq/backtest.py    core strategies, trade/report accounting
+nq/strategies.py  the 28-setup published library on one execution engine
+nq/levels.py      levels.json load/save, auto levels
+nq/reversal.py    reversal-likelihood ranking of levels
+nq/confluence.py  the confluence reversal signal engine
+nq/deflate.py     deflated Sharpe ratio
+nq/journal.py     SQLite signal journal
+nq/news.py        scheduled-news blackout guard
+nq/notify.py      ntfy.sh phone push
+trader/           Tradovate client, prop-firm risk rails, copier engine
+api/              Vercel serverless wrappers around dashboard.py builders
+fetch_nq.py       terminal fetcher/bias CLI
+analyze.py        terminal backtest CLI
+rank_levels.py    terminal level ranking CLI
+dashboard.py      stdlib HTTP server + JSON API
+index.html        the dashboard UI (self-contained)
+tests/            unittest suite (also run in GitHub Actions)
 ```

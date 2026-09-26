@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unittest:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests (stdlib only — no installs, like the deploy)
+        env:
+          NQ_JOURNAL: "0"
+        run: python -m unittest discover -s tests -v
+      - name: Demo CLIs run end to end
+        env:
+          NQ_JOURNAL: "0"
+          NQ_DEMO: "1"
+        run: |
+          python fetch_nq.py --demo --json > /dev/null
+          python analyze.py --demo --json > /dev/null
+          python rank_levels.py --demo --json > /dev/null
+        shell: bash

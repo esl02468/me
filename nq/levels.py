@@ -85,8 +85,10 @@ def save_levels(
 
 def compute_auto_levels(sess) -> list[dict]:
     """Computed session levels: PDH/PDL/mid, prev close, classic floor pivots,
-    weekly range, VWAP, opening range. `sess` is an nq.data.Session."""
-    from .bias import OPENING_RANGE_BARS, vwap
+    weekly range, overnight high/low, VWAP, opening range. `sess` is an
+    nq.data.Session; VWAP and the opening range come from its analysis
+    candles (RTH once the cash session is under way)."""
+    from .bias import opening_range, session_vwap
 
     out: list[dict] = []
 
@@ -110,10 +112,17 @@ def compute_auto_levels(sess) -> list[dict]:
             add(p - rng, "S2")
     add(getattr(sess, "week_high", None), "Week high")
     add(getattr(sess, "week_low", None), "Week low")
-    if sess.candles:
-        add(vwap(sess.candles)[-1], "VWAP")
-    if len(sess.candles) >= OPENING_RANGE_BARS:
-        or_bars = sess.candles[:OPENING_RANGE_BARS]
-        add(max(c.high for c in or_bars), "OR high")
-        add(min(c.low for c in or_bars), "OR low")
+    # Overnight range: only once RTH is what's being analysed — before the
+    # cash open the overnight *is* the session, and its extremes are just
+    # today's high and low.
+    if getattr(sess, "analysis_scope", "") == "rth":
+        add(getattr(sess, "overnight_high", None), "ON high")
+        add(getattr(sess, "overnight_low", None), "ON low")
+    candles = getattr(sess, "analysis_candles", sess.candles)
+    if candles:
+        add(session_vwap(candles), "VWAP")
+    orange = opening_range(candles) if candles else None
+    if orange:
+        add(orange[0], "OR high")
+        add(orange[1], "OR low")
     return out
