@@ -7,8 +7,7 @@ server-side so the browser never hits CORS walls:
   GET  /               dashboard UI
   GET  /api/snapshot   candles + price + bias + auto levels + user levels
   GET  /api/backtest   strategy analyzer results for today's session
-  GET  /api/levels     user levels from levels.json
-  POST /api/levels     replace user levels (dashboard editor)
+  GET  /api/edge       strategy canon measured against the deflated-Sharpe bar
 
 Usage:
   python3 dashboard.py                 # live data on http://localhost:8787
@@ -20,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import threading
 import time
@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from nq import deflate
 from nq.backtest import COST_POINTS, run_all
 from nq.bias import atr, compute_bias
 from nq.data import Session, get_chart_candles, get_session, nowcast_from_qqq
@@ -37,6 +38,7 @@ from nq.journal import record_markers, stats as journal_stats
 from nq.news import in_blackout, upcoming as news_upcoming
 from nq.notify import enabled as notify_enabled, push as notify_push
 from nq.reversal import filter_proven, rank_levels
+from nq.console import use_utf8_stdout
 
 ROOT = Path(__file__).parent
 INDEX = ROOT / "index.html"
@@ -221,22 +223,36 @@ def _push_fresh_signals(symbol: str, frame: str, markers: list[dict]) -> None:
 
 LEADERBOARD_FRAMES = ("1m", "5m", "15m", "1h")
 MIN_LB_TRADES = 5
+# Below this, the best-of-N result is indistinguishable from luck.
+DSR_THRESHOLD = 0.95
 
 
-def build_leaderboard(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
-    """Rank every published strategy across every timeframe by measured,
-    cost-honest expectancy on THIS instrument.
+def build_edge_bar(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
+    """Measure the published strategy canon against the bar it has to clear.
 
-    There is no public register of "the world's best" strategies — the
-    genuinely elite ones are never published. This ranks the public canon
-    (34 named setups) by what it actually did on your data: expectancy per
-    trade net of costs, with win rate, profit factor, and sample size shown
-    so a hot small sample can't masquerade as an edge.
+    This replaced a leaderboard that ranked the same strategies by expectancy
+    and stamped anything above a 51% win rate as "proven". Ranking N candidates
+    and reporting the winner is an order statistic, not an estimate: across
+    34 setups x 4 timeframes, the best result is whoever got luckiest, and the
+    old panel had no correction for that at all.
+
+    What is reported instead, per strategy x timeframe:
+
+      * Sharpe per trade, net of COST_POINTS friction.
+      * The Deflated Sharpe Ratio at the real trial count - the probability the
+        leader has a genuinely positive edge once luck's expected best across
+        every combination tested has been subtracted.
+
+    A row clears the bar at DSR >= 0.95. The expected outcome is that nothing
+    does, and that is the result the panel is built to show honestly. If a real
+    edge ever turns up it appears here automatically, because it will clear.
     """
     if demo is None:
         demo = True if _demo else None
     base: Session = get_session(symbol=symbol, demo=demo)
+
     rows = []
+    trials = 0  # every strategy x frame actually evaluated, not just the ones shown
     for tf in LEADERBOARD_FRAMES:
         try:
             sess = base if tf == "1m" else replace(
@@ -245,16 +261,20 @@ def build_leaderboard(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
             continue
         if len(sess.candles) < 60:
             continue
-        # Normalizer: a 1h bar moves far more than a 1m bar, so raw points
-        # would rank timeframes, not strategies. Expectancy is expressed in
-        # ATR units of its own frame — comparable across frames.
         frame_atr = atr(sess.candles) or 1.0
         for r in run_all(sess):
             closed = r.closed
+            if not closed:
+                continue
+            trials += 1
             if len(closed) < MIN_LB_TRADES:
                 continue
-            pf = r.profit_factor
+            pts = [t.points for t in closed]
+            sr = deflate.sharpe_ratio(pts)
+            if not math.isfinite(sr):
+                continue
             exp_pts = r.total_points / len(closed)
+            pf = r.profit_factor
             rows.append({
                 "strategy": r.strategy.split("(")[0],
                 "frame": tf,
@@ -265,18 +285,47 @@ def build_leaderboard(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
                 "exp_atr": round(exp_pts / frame_atr, 3),
                 "profit_factor": round(pf, 2) if pf != float("inf") else 99.0,
                 "max_dd": round(r.max_drawdown_points, 2),
-                "proven": bool(r.win_rate > 0.51 and pf > 1.0),
+                "sharpe": round(sr, 4),
+                "_pts": pts,
             })
-    # Rank by ATR-normalized expectancy, tie-broken by sample size.
-    rows.sort(key=lambda r: (r["exp_atr"], r["trades"]), reverse=True)
+
+    # Deflate against the real trial count. Every combination evaluated counts,
+    # including the ones too small to display - they were still searched.
+    n_trials = max(trials, 1)
+    for row in rows:
+        pts = row.pop("_pts")
+        dsr = deflate.deflated_sharpe_ratio(
+            row["sharpe"], len(pts), deflate.skewness(pts), deflate.kurtosis(pts),
+            n_trials,
+        )
+        row["dsr"] = round(dsr, 4) if math.isfinite(dsr) else None
+        row["clears"] = bool(row["dsr"] is not None and row["dsr"] >= DSR_THRESHOLD)
+
+    # Rank by the honest statistic, not by the one that flatters.
+    rows.sort(key=lambda r: (r["dsr"] if r["dsr"] is not None else -1.0,
+                             r["trades"]), reverse=True)
+
+    # Luck's expected best Sharpe across this many trials, on the median sample
+    # size - the height of the bar, in the same per-trade units as `sharpe`.
+    median_n = sorted(r["trades"] for r in rows)[len(rows) // 2] if rows else 0
+    luck_sr = (deflate.expected_max_sharpe(n_trials, deflate.null_sharpe_variance(median_n))
+               if median_n >= 2 else None)
+
+    survivors = sum(1 for r in rows if r["clears"])
     return {
         "symbol": base.symbol,
         "source": base.source,
         "frames": list(LEADERBOARD_FRAMES),
         "min_trades": MIN_LB_TRADES,
         "cost_pts": COST_POINTS,
+        "breakeven_pts": round(COST_POINTS, 3),
+        "dsr_threshold": DSR_THRESHOLD,
+        "n_trials": n_trials,
+        "luck_sharpe": round(luck_sr, 4) if luck_sr is not None else None,
+        "median_trades": median_n,
         "rows": rows[:25],
         "total_tested": len(rows),
+        "survivors": survivors,
     }
 
 
@@ -336,9 +385,9 @@ class Handler(BaseHTTPRequestHandler):
                                                    demo=demo_q if demo_q else (True if _demo else None))
                     ],
                 }))
-            elif route == "/api/leaderboard":
-                self._json(_cached(f"leaderboard:{symbol}:{dkey}", 300.0,
-                                   lambda: build_leaderboard(demo=demo_q, symbol=symbol)))
+            elif route == "/api/edge":
+                self._json(_cached(f"edge:{symbol}:{dkey}", 300.0,
+                                   lambda: build_edge_bar(demo=demo_q, symbol=symbol)))
             elif route == "/api/journal":
                 days = int(qs.get("days", ["30"])[0])
                 self._json({"days": days, "rows": journal_stats(days)})
@@ -376,6 +425,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    use_utf8_stdout()
     global _demo, _token
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8787)
@@ -392,7 +442,7 @@ def main() -> None:
               "anyone who finds the port can view the dashboard.")
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    mode = "DEMO (synthetic)" if _demo else "LIVE (yahoo → stooq fallback)"
+    mode = "DEMO (synthetic)" if _demo else "LIVE (yahoo -> stooq fallback)"
     tok = f"/?token={_token}" if _token else "/"
     print(f"NQ dashboard on http://{args.host}:{args.port}{tok}  [{mode}]")
     try:

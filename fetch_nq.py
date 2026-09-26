@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from nq.bias import compute_bias
 from nq.data import get_session
 from nq.levels import load_levels
+from nq.console import use_utf8_stdout
 
 ARROWS = {1: "▲", 0: "·", -1: "▼"}
 
@@ -83,6 +84,7 @@ def snapshot(demo: bool, as_json: bool) -> None:
 
 
 def main() -> int:
+    use_utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--watch", action="store_true", help="refresh every N seconds")
     ap.add_argument("--interval", type=float, default=15.0)

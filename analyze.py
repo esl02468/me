@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 from nq.backtest import run_all
 from nq.data import get_session
+from nq.console import use_utf8_stdout
 
 
 def fmt_ts(ts: int | None) -> str:
@@ -27,6 +28,7 @@ def fmt_ts(ts: int | None) -> str:
 
 
 def main() -> int:
+    use_utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--strategy", help="only strategies whose name starts with this")
     ap.add_argument("--demo", action="store_true", help="synthetic data, no network")

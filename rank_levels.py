@@ -18,6 +18,7 @@ from nq.bias import compute_bias
 from nq.data import get_session
 from nq.levels import load_levels
 from nq.reversal import filter_proven, rank_levels
+from nq.console import use_utf8_stdout
 
 
 def _all_levels(sess) -> list[dict]:
@@ -29,6 +30,7 @@ def _all_levels(sess) -> list[dict]:
 
 
 def main() -> int:
+    use_utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--demo", action="store_true", help="synthetic data, no network")
     ap.add_argument("--json", action="store_true", dest="as_json")
