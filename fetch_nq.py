@@ -40,6 +40,7 @@ def snapshot(demo: bool, as_json: bool) -> None:
                     "score": bias.score,
                     "components": bias.components,
                     "detail": bias.detail,
+                    "session": sess.analysis_scope,
                     "ts": int(time.time()),
                 },
                 indent=2,
@@ -53,7 +54,8 @@ def snapshot(demo: bool, as_json: bool) -> None:
         d = price - sess.prev_close
         chg = f"  {d:+.2f} ({d / sess.prev_close * 100:+.2f}%)"
     print(f"\n  {sess.symbol}  {price:,.2f}{chg}   [{sess.source}] {now}")
-    print(f"  BIAS: {bias.label}  (score {bias.score:+d}/5)")
+    scope = {"rth": "RTH 09:30-16:00 ET", "globex": "Globex session"}.get(sess.analysis_scope, sess.analysis_scope)
+    print(f"  BIAS: {bias.label}  (score {bias.score:+d}/5, on {scope}, {len(sess.analysis_candles)} bars)")
     names = {"vwap": "VWAP", "ema": "EMA 9/21", "or": "Open range", "prev": "Prev close", "momentum": "Momentum"}
     for key, vote in bias.components.items():
         extra = ""

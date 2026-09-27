@@ -30,6 +30,7 @@ BREAK_TOL_MULT = 2.0  # close beyond tol*this = break
 KIND_PRIOR = {
     "PDH": 15, "PDL": 15,
     "Week high": 14, "Week low": 14,
+    "ON high": 13, "ON low": 13,
     "OR high": 12, "OR low": 12,
     "Pivot P": 11, "R1": 10, "S1": 10, "R2": 9, "S2": 9,
     "VWAP": 10,

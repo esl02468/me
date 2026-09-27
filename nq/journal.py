@@ -44,8 +44,8 @@ def enabled() -> bool:
     return os.environ.get("NQ_JOURNAL", "1").strip() not in ("0", "false", "no")
 
 
-def _connect(path: str = DEFAULT_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, timeout=5)
+def _connect(path: str | None = None) -> sqlite3.Connection:
+    conn = sqlite3.connect(path or DEFAULT_PATH, timeout=5)
     conn.execute(_SCHEMA)
     return conn
 

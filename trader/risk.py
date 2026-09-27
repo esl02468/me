@@ -14,8 +14,13 @@ This module enforces loss limits; it cannot make automation allowed.
 
 from __future__ import annotations
 
-import time
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from nq.clock import central_hhmm  # noqa: E402
 
 
 @dataclass
@@ -25,7 +30,7 @@ class PropRules:
     max_contracts: int = 1
     daily_loss_limit: float | None = None      # $ — stop trading for the day
     trailing_drawdown: float | None = None     # $ below high-water mark
-    flatten_by: str | None = "15:55"           # HH:MM exchange time (Chicago)
+    flatten_by: str | None = "15:55"           # HH:MM exchange time (Chicago), any VPS timezone
     max_trades_per_day: int | None = None
     allow_automation: bool = False             # set true ONLY after checking your firm's policy
 
@@ -72,11 +77,8 @@ class RiskManager:
                 and s.equity <= s.high_water - abs(r.trailing_drawdown)):
             s.halted = "trailing drawdown"
             return s.halted
-        if r.flatten_by:
-            hh, mm = map(int, r.flatten_by.split(":"))
-            t = time.localtime(now or time.time())
-            if (t.tm_hour, t.tm_min) >= (hh, mm):
-                return f"past flatten_by {r.flatten_by}"
+        if r.flatten_by and _past_cutoff(r.flatten_by, now):
+            return f"past flatten_by {r.flatten_by} CT"
         return None
 
     def must_flatten(self, now: float | None = None) -> bool:
@@ -90,9 +92,14 @@ class RiskManager:
                 and s.equity <= s.high_water - abs(r.trailing_drawdown)):
             s.halted = "trailing drawdown"
             return True
-        if r.flatten_by:
-            hh, mm = map(int, r.flatten_by.split(":"))
-            t = time.localtime(now or time.time())
-            if (t.tm_hour, t.tm_min) >= (hh, mm):
-                return True
+        if r.flatten_by and _past_cutoff(r.flatten_by, now):
+            return True
         return False
+
+
+def _past_cutoff(hhmm: str, now: float | None) -> bool:
+    """Is the exchange clock (Chicago) at or past HH:MM? The first version
+    read the VPS's local clock, which on a UTC box fired the 15:55 cutoff
+    at 10:55 in Chicago."""
+    hh, mm = map(int, hhmm.split(":"))
+    return central_hhmm(now) >= (hh, mm)
