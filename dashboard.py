@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """NQ live dashboard server (stdlib only — no pip installs).
 
-Serves static/dashboard.html plus a small JSON API, proxying market data
-server-side so the browser never hits CORS walls:
+Serves index.html plus a small JSON API, proxying market data server-side
+so the browser never hits CORS walls:
 
   GET  /               dashboard UI
+  GET  /healthz        liveness for uptime monitors
   GET  /api/snapshot   candles + price + bias + auto levels + user levels
+  GET  /api/candles    other timeframes / range bars for the chart
+  GET  /api/signals    confluence reversal signals for the displayed series
   GET  /api/backtest   strategy analyzer results for today's session
   GET  /api/edge       strategy canon measured against the deflated-Sharpe bar
+  GET  /api/journal    multi-day signal record
+  GET  /api/levels     user levels (POST to replace)
+
+Analysis runs on the RTH session (09:30-16:00 ET) once it has an opening
+range, on the Globex day before that; NQ_SESSION=globex uses the whole day.
 
 Usage:
   python3 dashboard.py                 # live data on http://localhost:8787
@@ -18,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import math
 import os
@@ -31,7 +40,7 @@ from urllib.parse import parse_qs, urlparse
 from nq import deflate
 from nq.backtest import COST_POINTS, run_all
 from nq.bias import atr, compute_bias
-from nq.data import Session, get_chart_candles, get_session, nowcast_from_qqq
+from nq.data import Session, get_chart_candles, get_session, nowcast_from_qqq, session_mode
 from nq.levels import Level, compute_auto_levels, load_levels, save_levels
 from nq.confluence import FIRE_THRESHOLD, detect as confluence_detect, simulate as confluence_simulate
 from nq.journal import record_markers, stats as journal_stats
@@ -74,6 +83,21 @@ _auto_levels = compute_auto_levels
 MAX_MARKERS = 15
 
 
+def _session_meta(sess: Session) -> dict:
+    """Which bars the numbers were computed on, so the page can say so and
+    anchor its own VWAP at the same place."""
+    return {
+        "mode": sess.mode,                    # 'rth' | 'globex' (NQ_SESSION)
+        "scope": sess.analysis_scope,         # what analysis actually ran on
+        "start_ts": sess.session_start_ts,    # Globex open
+        "rth_open_ts": sess.rth_open_ts,      # 09:30 ET of the trade date
+        "rth_close_ts": sess.rth_close_ts,
+        "analysis_start_ts": sess.analysis_start_ts,
+        "bars": len(sess.candles),
+        "analysis_bars": len(sess.analysis_candles),
+    }
+
+
 def build_snapshot(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
     if demo is None:
         demo = True if _demo else None
@@ -102,6 +126,7 @@ def build_snapshot(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
         "ts": int(time.time()),
         "price": sess.last,
         "prev_close": sess.prev_close,
+        "session": _session_meta(sess),
         "candles": [
             {"t": c.ts, "o": c.open, "h": c.high, "l": c.low, "c": c.close, "v": c.volume}
             for c in sess.candles
@@ -131,7 +156,8 @@ def build_backtest(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
     return {
         "symbol": sess.symbol,
         "source": sess.source,
-        "candles": len(sess.candles),
+        "candles": len(sess.analysis_candles),
+        "session": _session_meta(sess),
         "reports": [r.summary() for r in reports],
     }
 
@@ -158,8 +184,9 @@ def build_signals(
     user = [asdict(l) for l in load_levels(sess.symbol)]
     scored = rank_levels(sess, user + _auto_levels(sess), bias)
     credible = filter_proven(scored)  # drop levels proven wrong on this series
-    signals = confluence_detect(sess.candles, credible, bias)
-    report = confluence_simulate(signals, sess.candles)
+    candles = sess.analysis_candles   # RTH once the cash session is live
+    signals = confluence_detect(candles, credible, bias)
+    report = confluence_simulate(signals, candles)
     closed = report.closed
     markers = [
         {
@@ -188,6 +215,7 @@ def build_signals(
         "symbol": sess.symbol,
         "engine": "confluence",
         "threshold": FIRE_THRESHOLD,
+        "session": _session_meta(sess),
         "strategies": [
             {
                 "name": "confluence",
@@ -225,6 +253,12 @@ LEADERBOARD_FRAMES = ("1m", "5m", "15m", "1h")
 MIN_LB_TRADES = 5
 # Below this, the best-of-N result is indistinguishable from luck.
 DSR_THRESHOLD = 0.95
+# The probabilistic Sharpe ratio is an asymptotic statistic: its variance
+# term uses sample skew and kurtosis, which five trades cannot estimate.
+# A 5-for-5 streak scored DSR 1.0 and "cleared" — precisely the trap the
+# panel exists to close. Rows with fewer trades than this are shown but get
+# no verdict.
+DSR_MIN_TRADES = 30
 
 
 def build_edge_bar(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
@@ -243,9 +277,10 @@ def build_edge_bar(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
         leader has a genuinely positive edge once luck's expected best across
         every combination tested has been subtracted.
 
-    A row clears the bar at DSR >= 0.95. The expected outcome is that nothing
-    does, and that is the result the panel is built to show honestly. If a real
-    edge ever turns up it appears here automatically, because it will clear.
+    A row clears the bar at DSR >= 0.95 with at least DSR_MIN_TRADES closed
+    trades. The expected outcome is that nothing does, and that is the result
+    the panel is built to show honestly. If a real edge ever turns up it
+    appears here automatically, because it will clear.
     """
     if demo is None:
         demo = True if _demo else None
@@ -299,10 +334,13 @@ def build_edge_bar(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
             n_trials,
         )
         row["dsr"] = round(dsr, 4) if math.isfinite(dsr) else None
-        row["clears"] = bool(row["dsr"] is not None and row["dsr"] >= DSR_THRESHOLD)
+        row["enough"] = row["trades"] >= DSR_MIN_TRADES
+        row["clears"] = bool(row["enough"] and row["dsr"] is not None
+                             and row["dsr"] >= DSR_THRESHOLD)
 
-    # Rank by the honest statistic, not by the one that flatters.
-    rows.sort(key=lambda r: (r["dsr"] if r["dsr"] is not None else -1.0,
+    # Rank by the honest statistic, not by the one that flatters; rows too
+    # thin for a verdict sort below every row that has one.
+    rows.sort(key=lambda r: (r["enough"], r["dsr"] if r["dsr"] is not None else -1.0,
                              r["trades"]), reverse=True)
 
     # Luck's expected best Sharpe across this many trials, on the median sample
@@ -317,6 +355,8 @@ def build_edge_bar(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
         "source": base.source,
         "frames": list(LEADERBOARD_FRAMES),
         "min_trades": MIN_LB_TRADES,
+        "dsr_min_trades": DSR_MIN_TRADES,
+        "session": _session_meta(base),
         "cost_pts": COST_POINTS,
         "breakeven_pts": round(COST_POINTS, 3),
         "dsr_threshold": DSR_THRESHOLD,
@@ -325,6 +365,7 @@ def build_edge_bar(demo: bool | None = None, symbol: str = "NQ=F") -> dict:
         "median_trades": median_n,
         "rows": rows[:25],
         "total_tested": len(rows),
+        "with_verdict": sum(1 for r in rows if r["enough"]),
         "survivors": survivors,
     }
 
@@ -346,7 +387,20 @@ class Handler(BaseHTTPRequestHandler):
             return True
         qs = parse_qs(urlparse(self.path).query)
         supplied = qs.get("token", [""])[0] or self.headers.get("X-NQ-Token", "")
-        return supplied == _token
+        # Constant-time: the token is the only thing between the VPS and
+        # the internet, so don't let response timing spell it out.
+        return hmac.compare_digest(supplied.encode(), _token.encode())
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        # Uptime monitors send HEAD; answer without building a payload.
+        if not self._authorized():
+            self.send_response(401)
+        elif urlparse(self.path).path in ("/", "/index.html") or urlparse(self.path).path.startswith("/api/"):
+            self.send_response(200)
+        else:
+            self.send_response(404)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
         route = urlparse(self.path).path
@@ -360,6 +414,9 @@ class Handler(BaseHTTPRequestHandler):
             dkey = "d" if demo_q else "l"
             if route in ("/", "/index.html"):
                 self._send(200, INDEX.read_bytes(), "text/html; charset=utf-8")
+            elif route == "/healthz":
+                self._json({"ok": True, "mode": "demo" if (_demo or demo_q) else "live",
+                            "session": session_mode(), "ts": int(time.time())})
             elif route == "/api/snapshot":
                 self._json(_cached(f"snapshot:{symbol}:{dkey}", CACHE_TTL,
                                    lambda: build_snapshot(demo=demo_q, symbol=symbol)))
@@ -395,6 +452,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"levels": [asdict(l) for l in load_levels(symbol)]})
             else:
                 self._json({"error": "not found"}, 404)
+        except ValueError as e:  # bad tf / rb / days — the caller's problem
+            self._json({"error": f"bad request: {e}"}, 400)
         except RuntimeError as e:
             self._json({"error": str(e)}, 503)
         except Exception as e:  # keep the server alive on upstream hiccups
@@ -444,7 +503,8 @@ def main() -> None:
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     mode = "DEMO (synthetic)" if _demo else "LIVE (yahoo -> stooq fallback)"
     tok = f"/?token={_token}" if _token else "/"
-    print(f"NQ dashboard on http://{args.host}:{args.port}{tok}  [{mode}]")
+    print(f"NQ dashboard on http://{args.host}:{args.port}{tok}  [{mode}, "
+          f"session={session_mode()}]")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
